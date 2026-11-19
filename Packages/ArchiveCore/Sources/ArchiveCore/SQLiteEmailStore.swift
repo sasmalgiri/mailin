@@ -1319,6 +1319,10 @@ actor SQLiteEmailStore: EmailArchiveStore {
             }
             v = 26
         }
+        // 2026-11-19: search documents remember the rowid run of their chunks
+        // (SearchChunkIndex "Chunk runs"); the two columns are added here, on
+        // every open, for stores created before them. Additive, no version change.
+        try ensureSearchDocRunColumns(handle)
         // B7: fill (email, folder) memberships the pre-fix v21 backfill
         // dropped at its page boundaries. Additive, once per archive; a
         // failure (disk full, …) never blocks opening — the key stays unset

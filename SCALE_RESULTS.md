@@ -476,3 +476,27 @@ Opt-in: `MAILIN_SCALE=1` — `V3ReviewTeamScaleTests`, `V31ScriptRunTests/testSh
 | Review Pack, 100,000 emails (~2 KB body each) | written 1.7 s (200 MB); opened and verified 3.3 s; random body reads instant; 100,000-decision response written and verified 0.9 s; memory +28 MB (bodies are read on demand) |
 | Team case, 100,000 log entries from 3 reviewers | cold open (every entry's signature and chain checked) 7.3 s, +186 MB; reload after one new entry **0.23 s**. Before the fix found by this run it was 6.5 s: a date formatter was built for every entry on every reload |
 | Shortcuts Find, 100,000-email archive | 10,000 results (the stated per-Find limit) in 0.05 s, +36 MB |
+
+## 2026-11-19 — import write cost grew with the archive (CLOSE-08)
+
+**Found:** the owner imported `enron.mbox` (213,466,347 B, 56,699 messages) in the Debug-Connected app on the
+MacBook Air (M4, 16 GiB) for the App Store pictures: **33 % after one hour**, while the 2026-11-18 row above
+stored the same file in 703 s through the same `BulkImportCoordinator`. lldb on the running app: the import
+thread was in `SQLiteEmailStore.indexSearchDocument` → `DELETE FROM search_chunks WHERE email_id = ? AND kind = ?
+AND ordinal = ?` → `fts5NextMethod` → `readDbPage` / `pread`; the batch envelope was `maxMessages = 8` (the
+adaptive controller's floor, reached through "store commits are slow").
+
+**Cause:** `search_chunks` is FTS5 and those three columns are UNINDEXED, so the DELETE visits every chunk row.
+Five documents per message, each cleared before it is written: cost ∝ table size, i.e. quadratic over an
+import. The engine benchmark paid the same scans but from a warm 128 MB page cache; in the app the store's
+cache was smaller and under memory-pressure evictions, so the scans went to disk, and every slow commit shrank
+the batch further (7,000+ commits and checkpoints for the file instead of ~115).
+
+**Fix:** `search_docs.first_rowid` / `last_rowid` (added on open; no version change). A document's chunks are
+written as one contiguous rowid run; clearing is `DELETE … WHERE rowid >= ? AND rowid <= ? AND email_id = ? …`
+(FTS5 rowid index), a fresh document does no DELETE, rows from before the columns are still cleared by the old
+scan. `SearchChunkRunTests.testWriteCost_staysFlatAsTheIndexGrows`: 8 × 300 messages — old path last/first =
+10.4 (1.87 s for the last 300, in-cache), fixed = flat, 0.86 s for all 2,400.
+
+**To re-measure on the candidate (not yet run after the fix):** the mbox row of `RealCorpusMatrixTests`
+(`MAILIN_SCALE=1`, Debug test host) and the owner's app import of the same file; both figures belong here.

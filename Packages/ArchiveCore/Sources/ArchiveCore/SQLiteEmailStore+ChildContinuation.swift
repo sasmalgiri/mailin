@@ -52,15 +52,10 @@ extension SQLiteEmailStore {
                 }
             }
             // 2. The previous record of this attachment's children, cleared.
-            let low = Int64(SearchDocKind.childOrdinal(parent: position, child: 0))
-            let high = Int64(SearchDocKind.childOrdinal(parent: position + 1, child: 0))
-            for sql in ["DELETE FROM search_chunks WHERE email_id = ? AND kind = 'childText' AND ordinal >= ? AND ordinal < ?;",
-                        "DELETE FROM search_docs WHERE email_id = ? AND kind = 'childText' AND ordinal >= ? AND ordinal < ?;"] {
-                let clear = try prepare(db, sql)
-                defer { sqlite3_finalize(clear) }
-                bindText(clear, 1, id); sqlite3_bind_int64(clear, 2, low); sqlite3_bind_int64(clear, 3, high)
-                guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-            }
+            // 2026-11-19: by each document's rowid run (one scan only for rows
+            // that predate the run columns) — see "Chunk runs" in SearchChunkIndex.
+            try removeSearchDocuments(db, emailID: id, kind: SearchDocKind.childText.rawValue,
+                                      ordinals: SearchDocKind.childOrdinal(parent: position, child: 0)..<SearchDocKind.childOrdinal(parent: position + 1, child: 0))
             let clearRows = try prepare(db, "DELETE FROM attachment_children WHERE email_id = ? AND position = ?;")
             defer { sqlite3_finalize(clearRows) }
             bindText(clearRows, 1, id); sqlite3_bind_int64(clearRows, 2, Int64(position))

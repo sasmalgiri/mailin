@@ -747,12 +747,22 @@ extension SQLiteEmailStore {
         do {
             let insert = try prepare(db, "INSERT INTO search_chunks(email_id, kind, ordinal, chunk, text) VALUES (?,'body',0,?,?);")
             defer { sqlite3_finalize(insert) }
+            var firstRowid: Int64?
+            var lastRowid: Int64 = 0
             for (offset, chunk) in chunks.enumerated() {
                 sqlite3_reset(insert); sqlite3_clear_bindings(insert)
                 bindText(insert, 1, emailID.uuidString)
                 sqlite3_bind_int64(insert, 2, Int64(firstIndex + offset))
                 bindText(insert, 3, chunk)
                 guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                lastRowid = sqlite3_last_insert_rowid(db)
+                if firstRowid == nil { firstRowid = lastRowid }
+            }
+            // 2026-11-19: the body document's rowid run grows with every
+            // appended page, so a later rewrite clears it by range, not by scan.
+            if let firstRowid {
+                try extendSearchDocumentRun(db, emailID: emailID.uuidString, kind: SearchDocKind.body.rawValue, ordinal: 0,
+                                            first: firstRowid, last: lastRowid)
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }
