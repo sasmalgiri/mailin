@@ -52,12 +52,10 @@ review notes below are the 4.0.1 versions. Where a line below says 4.0 / 1000, r
       (`FIVE_JOBS_TRACKER.md` § v4.0, release-audit note) — 9782aa6 is on `v3-architecture` and `main`.
 - [x] ~~**Privacy page published.** `https://sasmalgiri.github.io/mailin/privacy/` says version 4.0 and lists
       `imap.gmail.com` / `graph.microsoft.com` (2026-11-19). The 3.0 text is at `/privacy/3.0.html`.~~
-- [ ] **4.0.1 privacy page published.** Merge `v3-architecture` into `main` and push (GitHub Pages publishes `main`);
-      then open `https://sasmalgiri.github.io/mailin/privacy/`: it must say "Effective Date: November 19, 2026
-      (version 4.0.1)", list `accounts.google.com` / `gmail.googleapis.com` / `graph.microsoft.com`, and the
-      "Google API Services" heading must no longer say "applies only when Google sign-in ships". The 4.0 text is at
-      `/privacy/4.0.html`, the 3.0 text at `/privacy/3.0.html`. Until this is live, do not submit (App Review and
-      Google read the URL).
+- [x] **4.0.1 privacy page published** (2026-11-19, owner approved; `main` fast-forwarded to 03530d1 and pushed).
+      `https://sasmalgiri.github.io/mailin/privacy/` says "Effective Date: November 19, 2026 (version 4.0.1)", lists
+      `accounts.google.com` / `gmail.googleapis.com` / `graph.microsoft.com`, the heading is "Google API Services"
+      (no longer "applies only when…"); `/privacy/4.0.html` answers HTTP 200; the 3.0 text stays at `/privacy/3.0.html`.
 - [x] Xcode run destination is **My Mac** (2026-11-19); repeat the archive for **Any iOS Device** for the iPhone / iPad build.
 
 ## 1. Archive, validate, upload
