@@ -500,3 +500,24 @@ scan. `SearchChunkRunTests.testWriteCost_staysFlatAsTheIndexGrows`: 8 × 300 mes
 
 **To re-measure on the candidate (not yet run after the fix):** the mbox row of `RealCorpusMatrixTests`
 (`MAILIN_SCALE=1`, Debug test host) and the owner's app import of the same file; both figures belong here.
+
+## 2026-11-19 — PERF-00 baseline (Release, pre-optimisation head e918bb0)
+
+Engine matrix `RealCorpusMatrixTests` run with `swift test -c release -Xswiftc -enable-testing`
+(`MAILIN_REAL_CORPUS=~/Downloads/Mail/Fixtures/real-corpus-enron`, `MAILIN_SCALE=1`) from a detached worktree at
+**e918bb0** (CLOSE-08 included, PERF-01…04 not), MacBook Air M4 16 GiB, macOS 27.0.1, 18:15–19:32 IST.
+**Caveat:** the Mac was not idle — Xcode test runs and package builds for PERF-01…04 ran at the same time, so these
+figures are an upper bound; the PERF-05 "after" run must be taken under the same or quieter conditions, and the
+baseline re-run quietly if the two are to be compared to better than ~20 %.
+
+| Source | Bytes | Messages | Discover | Import | Footprint growth | Store / FTS | Reconciliation |
+|---|---|---|---|---|---|---|---|
+| mbox (real, mboxrd) | 213.5 MB | 56,699 | 0.74 s | **768.4 s** | 50 MB | 701.6 / 300.0 MB | discovered 56699, parsed 56699, damaged 0, persist failed 0, FTS rows 56699 |
+| eml folder tree (real files) | 210.2 MB | 56,699 | 34.21 s | **1,611.6 s** | 141 MB | 715.6 / 298.4 MB | same; 118 of 118 folders, unmatched 0 |
+| zip of the tree (real files) | 102.1 MB | 56,699 | 0.61 s | **1,315.1 s** | 0 MB | 716.5 / 297.5 MB | same; 118 of 118 folders |
+| pst (mailin writer, from the real archive) | 764.2 MB | 56,699 | 0.55 s | **771.7 s** | 54 MB | 790.0 / 298.8 MB | same |
+
+Exports: mbox 19.2 s, eml 18.0 s, pst 33.8 s; verify mbox 40.0 s / eml 37.7 s, both complete 56,699 / 56,699.
+Release is not faster than the 2026-11-18 Debug figures (703 / 1,281 / 1,383 / 786 s): the engine is bound by the
+store and index writes, not by Swift code. First-visible / app-level figures (the in-app Import Measurement in a
+Release build) and the 1 GB, attachment-heavy and OST rows are still owed (PERF-00 in `FIVE_JOBS_TRACKER.md`).
