@@ -124,16 +124,25 @@ prints the mode of the built app (step 5).
 
 The first screenshots are what people look at; they follow the same order as the listing. One caption line on each.
 
-Mac (2880 × 1800 or 1440 × 900):
-1. **Open large archives** — a big PST or Takeout MBOX just opened: the import receipt with its counts. Caption: "Open huge archives — PST, MBOX, EML, MSG, OST."
-2. **Keep every folder** — the Archive sidebar with the original folder tree and counts. Caption: "Every folder, exactly as it was."
-3. **Search messages and attachments** — a search that matched inside a PDF / Word attachment, with the "where it matched" chip. Caption: "Find words inside attachments and scans."
-4. **Find duplicates safely** — the duplicates view: byte-identical vs look-alike groups, the count before removal. Caption: "Duplicates found safely — counts first."
-5. **Export with proof** — an export receipt that verified every file. Caption: "Every export ends with a receipt."
-6. **Live Mail** — the mailbox with previews, folders and a message open. Caption: "New: your live mail, in the same place."
-7. **Composer** (optional) — formatting bar and "Attach from Archive".
+**The ten pictures (owner 2026-11-19).** Pictures 1–5 are the five jobs — the reason the product exists
+(`FIVE_JOBS_MASTER_PLAN.md` §1: open large archives, preserve folders, search messages and attachments, identify
+duplicates safely, verify exports) — in the order of the description. 6–7 are what 4.0 adds (Live Mail). 8–10 show
+the three properties every job rests on: private by design, honest counts, and the recipes that string the jobs
+together. Nothing else (AI, Professional tools, studios) goes on the listing: those are secondary in the description too.
 
-iPhone / iPad: 1, 3, 5 and 6, once the layouts are checked on a device.
+Mac (2880 × 1800 or 1440 × 900), on the candidate, demo mail only, one caption line each:
+1. **Open large archives** — a big PST or Takeout MBOX just opened: the import receipt with its counts (Complete, X of X). Caption: "Open huge archives — PST, MBOX, EML, MSG, OST, OLM, NSF."
+2. **Keep every folder** — the Archive sidebar: the original folder tree with counts, an empty folder kept, nested folders. Caption: "Every folder, exactly as it was."
+3. **Search messages and attachments** — a search that matched inside a PDF or Word attachment, the "where it matched" chip and the coverage line. Caption: "Find words inside attachments and scans."
+4. **Find duplicates safely** — the duplicates view: a byte-identical group and a "similar, not identical" group, the count shown before moving. Caption: "Duplicates found safely — counts first."
+5. **Export with proof** — an export receipt that verified every file (rehash + content). Caption: "Every export ends with a receipt."
+6. **Live Mail** — the mailbox: accounts in the sidebar, previews, a message open. Caption: "New: your live mail, in the same place."
+7. **Preserve mail** — an account's sheet with Preserve mail on and the capture progress / "Sync now", or the Archive showing captured mail with its labels. Caption: "Preserve mail saves every message into your archive."
+8. **Private by design** — Settings ▸ Health ▸ Mail network (every connection listed, nothing else) or the About privacy line. Caption: "No mailin server. Your device talks only to your provider."
+9. **Honest counts** — Advanced Search with the result count and "covered N of M" line, or the Free plan's "newest 500" notice. Caption: "Every search says what it covered."
+10. **Recipes** — Recipes ▸ "Find & export": choose → review → result with the receipt. Caption: "Find, review, export — one guided run."
+
+iPhone / iPad (up to 10 each): 1, 3, 5, 6 at least; 2, 4, 7, 10 if the layout reads at phone size (GATE1_UI_WALK_2026-11-18.md walked them).
 
 Do not reuse 3.0 screenshots that show "Live Mail is not included" or "Offline & Private" on the connected listing.
 
