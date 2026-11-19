@@ -377,6 +377,78 @@ extension SQLiteEmailStore {
         }
     }
 
+    /// One-time backfill of the runs for rows written before the columns
+    /// (PERF-01, 2026-11-19): one grouped pass over the chunk table instead of
+    /// one scan per document the day each is rewritten. Marked in `meta` so it
+    /// runs once per archive; a legacy row that appears later (none should) is
+    /// still handled by the scan path. Runs at the end of every migration.
+    static let searchDocRunBackfillKey = "search_doc_runs_backfilled"
+
+    func backfillSearchDocRunsIfNeeded(_ db: OpaquePointer) throws {
+        try exec(db, "CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0);")
+        guard (try scalarInt(db, "SELECT COALESCE((SELECT value FROM meta WHERE key = '\(Self.searchDocRunBackfillKey)'), 0);")) == 0 else { return }
+        let info = try prepare(db, "PRAGMA table_info(search_docs);")
+        let hasTable = try stepRow(info, db)
+        sqlite3_finalize(info)
+        guard hasTable else { return }
+        let legacy = try scalarInt(db, "SELECT COUNT(*) FROM search_docs WHERE first_rowid IS NULL;")
+        try inExclusiveTransaction(db) {
+            if legacy > 0 {
+                try exec(db, """
+                    UPDATE search_docs SET first_rowid = r.lo, last_rowid = r.hi
+                    FROM (SELECT email_id, kind, ordinal, MIN(rowid) AS lo, MAX(rowid) AS hi
+                          FROM search_chunks GROUP BY email_id, kind, ordinal) AS r
+                    WHERE search_docs.email_id = r.email_id AND search_docs.kind = r.kind AND search_docs.ordinal = r.ordinal
+                      AND search_docs.first_rowid IS NULL;
+                """)
+                // Rows with no chunk at all: the empty run, never NULL again.
+                try exec(db, "UPDATE search_docs SET first_rowid = 1, last_rowid = 0 WHERE first_rowid IS NULL;")
+            }
+            try exec(db, "INSERT INTO meta(key, value) VALUES ('\(Self.searchDocRunBackfillKey)', 1) ON CONFLICT(key) DO UPDATE SET value = 1;")
+        }
+    }
+
+    /// The statements one document write uses, prepared once per batch
+    /// (PERF-01): five documents per message used to prepare three statements
+    /// each. `preparedCount` is a test seam.
+    final class SearchDocStatements {
+        nonisolated(unsafe) static var preparedCount = 0
+        let existing: OpaquePointer?
+        let clearRun: OpaquePointer?
+        let clearScan: OpaquePointer?
+        let insertChunk: OpaquePointer?
+        let upsertDoc: OpaquePointer?
+
+        init(prepare: (String) throws -> OpaquePointer?) throws {
+            existing = try prepare("SELECT chunk_count, first_rowid, last_rowid FROM search_docs WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+            clearRun = try prepare("DELETE FROM search_chunks WHERE rowid >= ? AND rowid <= ? AND email_id = ? AND kind = ? AND ordinal = ?;")
+            clearScan = try prepare("DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
+            insertChunk = try prepare("INSERT INTO search_chunks(email_id, kind, ordinal, chunk, text) VALUES (?,?,?,?,?);")
+            upsertDoc = try prepare("""
+                INSERT INTO search_docs(email_id, kind, ordinal, revision, chunk_count, text_chars, state, extractor_version, ocr, first_rowid, last_rowid)
+                VALUES (?,?,?,1,?,?,?,?,?,?,?)
+                ON CONFLICT(email_id, kind, ordinal) DO UPDATE SET
+                    revision = search_docs.revision + 1, chunk_count = excluded.chunk_count, text_chars = excluded.text_chars,
+                    state = excluded.state, extractor_version = excluded.extractor_version, ocr = excluded.ocr,
+                    first_rowid = excluded.first_rowid, last_rowid = excluded.last_rowid;
+            """)
+            Self.preparedCount += 1
+        }
+
+        func finalize() {
+            for stmt in [existing, clearRun, clearScan, insertChunk, upsertDoc] { sqlite3_finalize(stmt) }
+        }
+    }
+
+    /// Runs `body` with the caller's bundle, or with a transient one.
+    func withSearchDocStatements<T>(_ db: OpaquePointer, _ provided: SearchDocStatements?,
+                                    _ body: (SearchDocStatements) throws -> T) throws -> T {
+        if let provided { return try body(provided) }
+        let bundle = try SearchDocStatements { try prepare(db, $0) }
+        defer { bundle.finalize() }
+        return try body(bundle)
+    }
+
     /// The rowid run one document's chunks occupy.
     struct ChunkRun: Equatable { var first: Int64; var last: Int64 }
 
@@ -391,40 +463,46 @@ extension SQLiteEmailStore {
         case legacy(chunkCount: Int)
     }
 
-    func existingSearchDocument(_ db: OpaquePointer, emailID: String, kind: String, ordinal: Int) throws -> ExistingSearchDocument {
-        let stmt = try prepare(db, "SELECT chunk_count, first_rowid, last_rowid FROM search_docs WHERE email_id = ? AND kind = ? AND ordinal = ?;")
-        defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, emailID); bindText(stmt, 2, kind); sqlite3_bind_int64(stmt, 3, Int64(ordinal))
-        guard try stepRow(stmt, db) else { return .none }
-        if sqlite3_column_type(stmt, 1) != SQLITE_NULL, sqlite3_column_type(stmt, 2) != SQLITE_NULL {
-            return .run(ChunkRun(first: sqlite3_column_int64(stmt, 1), last: sqlite3_column_int64(stmt, 2)))
+    func existingSearchDocument(_ db: OpaquePointer, emailID: String, kind: String, ordinal: Int,
+                                statements: SearchDocStatements? = nil) throws -> ExistingSearchDocument {
+        try withSearchDocStatements(db, statements) { bundle in
+            let stmt = bundle.existing
+            sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+            bindText(stmt, 1, emailID); bindText(stmt, 2, kind); sqlite3_bind_int64(stmt, 3, Int64(ordinal))
+            guard try stepRow(stmt, db) else { return .none }
+            if sqlite3_column_type(stmt, 1) != SQLITE_NULL, sqlite3_column_type(stmt, 2) != SQLITE_NULL {
+                return .run(ChunkRun(first: sqlite3_column_int64(stmt, 1), last: sqlite3_column_int64(stmt, 2)))
+            }
+            return .legacy(chunkCount: Int(sqlite3_column_int64(stmt, 0)))
         }
-        return .legacy(chunkCount: Int(sqlite3_column_int64(stmt, 0)))
     }
 
     /// Removes the chunk rows of one document: by rowid run when known, by
     /// the old scan when the row predates the run columns. Still filtered on
     /// the document's identity, so a run can never take another document's rows.
-    func clearSearchChunks(_ db: OpaquePointer, emailID: String, kind: String, ordinal: Int, existing: ExistingSearchDocument) throws {
+    func clearSearchChunks(_ db: OpaquePointer, emailID: String, kind: String, ordinal: Int, existing: ExistingSearchDocument,
+                           statements: SearchDocStatements? = nil) throws {
         switch existing {
         case .none:
             return
         case .run(let run):
-            let clear = try prepare(db, """
-                DELETE FROM search_chunks WHERE rowid >= ? AND rowid <= ? AND email_id = ? AND kind = ? AND ordinal = ?;
-            """)
-            defer { sqlite3_finalize(clear) }
-            sqlite3_bind_int64(clear, 1, run.first); sqlite3_bind_int64(clear, 2, run.last)
-            bindText(clear, 3, emailID); bindText(clear, 4, kind); sqlite3_bind_int64(clear, 5, Int64(ordinal))
-            guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try withSearchDocStatements(db, statements) { bundle in
+                let clear = bundle.clearRun
+                sqlite3_reset(clear); sqlite3_clear_bindings(clear)
+                sqlite3_bind_int64(clear, 1, run.first); sqlite3_bind_int64(clear, 2, run.last)
+                bindText(clear, 3, emailID); bindText(clear, 4, kind); sqlite3_bind_int64(clear, 5, Int64(ordinal))
+                guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
         case .legacy:
             // A legacy row may own chunk rows whatever its chunk_count says (a
             // streamed body appends chunks before its count is written), so the
             // scan is kept for it. Legacy rows are rewritten with a run below.
-            let clear = try prepare(db, "DELETE FROM search_chunks WHERE email_id = ? AND kind = ? AND ordinal = ?;")
-            defer { sqlite3_finalize(clear) }
-            bindText(clear, 1, emailID); bindText(clear, 2, kind); sqlite3_bind_int64(clear, 3, Int64(ordinal))
-            guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            try withSearchDocStatements(db, statements) { bundle in
+                let clear = bundle.clearScan
+                sqlite3_reset(clear); sqlite3_clear_bindings(clear)
+                bindText(clear, 1, emailID); bindText(clear, 2, kind); sqlite3_bind_int64(clear, 3, Int64(ordinal))
+                guard sqlite3_step(clear) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+            }
         }
     }
 
@@ -498,48 +576,43 @@ extension SQLiteEmailStore {
     /// Replace one document's chunks and state. `text` nil = no chunks; the
     /// state says why. Runs inside the caller's transaction.
     func indexSearchDocument(_ db: OpaquePointer, emailID: String, kind: SearchDocKind, ordinal: Int,
-                             text: String?, state: SearchDocState, extractorVersion: Int = 0, ocr: Bool = false) throws {
-        let existing = try existingSearchDocument(db, emailID: emailID, kind: kind.rawValue, ordinal: ordinal)
-        try clearSearchChunks(db, emailID: emailID, kind: kind.rawValue, ordinal: ordinal, existing: existing)
+                             text: String?, state: SearchDocState, extractorVersion: Int = 0, ocr: Bool = false,
+                             statements: SearchDocStatements? = nil) throws {
+        try withSearchDocStatements(db, statements) { bundle in
+            let existing = try existingSearchDocument(db, emailID: emailID, kind: kind.rawValue, ordinal: ordinal, statements: bundle)
+            try clearSearchChunks(db, emailID: emailID, kind: kind.rawValue, ordinal: ordinal, existing: existing, statements: bundle)
 
-        var chunkCount = 0
-        var chars = 0
-        var run: ChunkRun?
-        if let text, !text.isEmpty {
-            let insert = try prepare(db, "INSERT INTO search_chunks(email_id, kind, ordinal, chunk, text) VALUES (?,?,?,?,?);")
-            defer { sqlite3_finalize(insert) }
-            for (index, chunk) in SearchChunker.chunks(of: text).enumerated() {
-                sqlite3_reset(insert); sqlite3_clear_bindings(insert)
-                bindText(insert, 1, emailID); bindText(insert, 2, kind.rawValue)
-                sqlite3_bind_int64(insert, 3, Int64(ordinal)); sqlite3_bind_int64(insert, 4, Int64(index))
-                bindText(insert, 5, chunk)
-                guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
-                let rowid = sqlite3_last_insert_rowid(db)
-                if run == nil { run = ChunkRun(first: rowid, last: rowid) } else { run?.last = rowid }
-                chunkCount += 1
+            var chunkCount = 0
+            var chars = 0
+            var run: ChunkRun?
+            if let text, !text.isEmpty {
+                let insert = bundle.insertChunk
+                for (index, chunk) in SearchChunker.chunks(of: text).enumerated() {
+                    sqlite3_reset(insert); sqlite3_clear_bindings(insert)
+                    bindText(insert, 1, emailID); bindText(insert, 2, kind.rawValue)
+                    sqlite3_bind_int64(insert, 3, Int64(ordinal)); sqlite3_bind_int64(insert, 4, Int64(index))
+                    bindText(insert, 5, chunk)
+                    guard sqlite3_step(insert) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
+                    let rowid = sqlite3_last_insert_rowid(db)
+                    if run == nil { run = ChunkRun(first: rowid, last: rowid) } else { run?.last = rowid }
+                    chunkCount += 1
+                }
+                chars = text.count
             }
-            chars = text.count
+            let doc = bundle.upsertDoc
+            sqlite3_reset(doc); sqlite3_clear_bindings(doc)
+            bindText(doc, 1, emailID); bindText(doc, 2, kind.rawValue); sqlite3_bind_int64(doc, 3, Int64(ordinal))
+            sqlite3_bind_int64(doc, 4, Int64(chunkCount)); sqlite3_bind_int64(doc, 5, Int64(chars))
+            bindText(doc, 6, state.rawValue); sqlite3_bind_int64(doc, 7, Int64(extractorVersion)); sqlite3_bind_int(doc, 8, ocr ? 1 : 0)
+            if let run {
+                sqlite3_bind_int64(doc, 9, run.first); sqlite3_bind_int64(doc, 10, run.last)
+            } else {
+                // No chunks: an empty run (first > last) rather than NULL, so the
+                // row is never mistaken for a legacy one and never scanned for.
+                sqlite3_bind_int64(doc, 9, 1); sqlite3_bind_int64(doc, 10, 0)
+            }
+            guard sqlite3_step(doc) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
         }
-        let doc = try prepare(db, """
-            INSERT INTO search_docs(email_id, kind, ordinal, revision, chunk_count, text_chars, state, extractor_version, ocr, first_rowid, last_rowid)
-            VALUES (?,?,?,1,?,?,?,?,?,?,?)
-            ON CONFLICT(email_id, kind, ordinal) DO UPDATE SET
-                revision = search_docs.revision + 1, chunk_count = excluded.chunk_count, text_chars = excluded.text_chars,
-                state = excluded.state, extractor_version = excluded.extractor_version, ocr = excluded.ocr,
-                first_rowid = excluded.first_rowid, last_rowid = excluded.last_rowid;
-        """)
-        defer { sqlite3_finalize(doc) }
-        bindText(doc, 1, emailID); bindText(doc, 2, kind.rawValue); sqlite3_bind_int64(doc, 3, Int64(ordinal))
-        sqlite3_bind_int64(doc, 4, Int64(chunkCount)); sqlite3_bind_int64(doc, 5, Int64(chars))
-        bindText(doc, 6, state.rawValue); sqlite3_bind_int64(doc, 7, Int64(extractorVersion)); sqlite3_bind_int(doc, 8, ocr ? 1 : 0)
-        if let run {
-            sqlite3_bind_int64(doc, 9, run.first); sqlite3_bind_int64(doc, 10, run.last)
-        } else {
-            // No chunks: an empty run (first > last) rather than NULL, so the
-            // row is never mistaken for a legacy one and never scanned for.
-            sqlite3_bind_int64(doc, 9, 1); sqlite3_bind_int64(doc, 10, 0)
-        }
-        guard sqlite3_step(doc) == SQLITE_DONE else { throw SQLiteStoreError.step(lastError(db)) }
     }
 
     /// The message's own documents: subject, sender, recipients (To, Cc and
@@ -547,29 +620,35 @@ extension SQLiteEmailStore {
     /// R5: a message stored from its headers only (`deferredBody`) has its body
     /// in the original file — its body document is `partial` ("may match", not
     /// "no text") until `StreamedBodyIndexer` streams it in.
-    func indexEmailSearchDocuments(_ db: OpaquePointer, email: MBOXParser.RawEmail, deferredBody: Bool = false) throws {
-        let id = email.id.uuidString
-        try indexSearchDocument(db, emailID: id, kind: .subject, ordinal: 0, text: email.headers["Subject"], state: .complete)
-        try indexSearchDocument(db, emailID: id, kind: .sender, ordinal: 0, text: email.headers["From"], state: .complete)
-        let recipients = [email.headers["To"], email.headers["Cc"] ?? email.headers["CC"], email.headers["Bcc"] ?? email.headers["BCC"]]
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
-        try indexSearchDocument(db, emailID: id, kind: .recipients, ordinal: 0, text: recipients, state: .complete)
-        let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
-        if deferredBody, body.isEmpty {
-            try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: nil, state: .partial)
-        } else {
-            try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: body,
-                                    state: body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .noText : .complete)
-        }
-        if !email.attachments.isEmpty {
-            let names = email.attachments.map(\.filename).joined(separator: "\n")
-            try indexSearchDocument(db, emailID: id, kind: .attachmentName, ordinal: 0, text: names, state: .complete)
+    func indexEmailSearchDocuments(_ db: OpaquePointer, email: MBOXParser.RawEmail, deferredBody: Bool = false,
+                                   statements: SearchDocStatements? = nil) throws {
+        try withSearchDocStatements(db, statements) { bundle in
+            let id = email.id.uuidString
+            try indexSearchDocument(db, emailID: id, kind: .subject, ordinal: 0, text: email.headers["Subject"], state: .complete, statements: bundle)
+            try indexSearchDocument(db, emailID: id, kind: .sender, ordinal: 0, text: email.headers["From"], state: .complete, statements: bundle)
+            let recipients = [email.headers["To"], email.headers["Cc"] ?? email.headers["CC"], email.headers["Bcc"] ?? email.headers["BCC"]]
+                .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+            try indexSearchDocument(db, emailID: id, kind: .recipients, ordinal: 0, text: recipients, state: .complete, statements: bundle)
+            let body = email.plainBody.isEmpty ? FTSSearchIndex.stripHTMLText(email.htmlBody) : email.plainBody
+            if deferredBody, body.isEmpty {
+                try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: nil, state: .partial, statements: bundle)
+            } else {
+                try indexSearchDocument(db, emailID: id, kind: .body, ordinal: 0, text: body,
+                                        state: body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .noText : .complete,
+                                        statements: bundle)
+            }
+            if !email.attachments.isEmpty {
+                let names = email.attachments.map(\.filename).joined(separator: "\n")
+                try indexSearchDocument(db, emailID: id, kind: .attachmentName, ordinal: 0, text: names, state: .complete, statements: bundle)
+            }
         }
     }
 
     /// One email's attachment documents, from the attachment text job.
     func indexAttachmentSearchDocuments(emailID: UUID, documents: [AttachmentSearchDocument]) throws {
         let db = try ensureDB()
+        let bundle = try SearchDocStatements { try prepare(db, $0) }
+        defer { bundle.finalize() }
         try exec(db, SQLiteHygiene.beginWrite)
         do {
             let id = emailID.uuidString
@@ -583,7 +662,8 @@ extension SQLiteEmailStore {
                 // FIND-08: cells, rows, slides, sheets and pages carry an explicit boundary.
                 let text = document.text.map { SectionBoundary.marked($0, layout: SectionBoundary.layout(filename: document.filename)) }
                 try indexSearchDocument(db, emailID: id, kind: kind, ordinal: document.ordinal, text: text,
-                                        state: document.state, extractorVersion: document.extractorVersion, ocr: document.ocr)
+                                        state: document.state, extractorVersion: document.extractorVersion, ocr: document.ocr,
+                                        statements: bundle)
             }
             try exec(db, "COMMIT;")
         } catch { try? exec(db, "ROLLBACK;"); throw error }

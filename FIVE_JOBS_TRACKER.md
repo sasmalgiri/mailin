@@ -386,6 +386,22 @@ Review findings (plan §1.3) map to rows: CUR-01 → REC-02, CUR-02 → REC-04, 
 
 **Release audit note (2026-11-14).** Five release audits of the 4.0 candidate were run on 2026-11-14 and reported about 70 findings in total (privacy / store claims, no-network proof, connected-mail behaviour, UI, release process). Fixes are **in progress**; no row above moves on the strength of the audits. Closed so far in docs/scripts (this pass): the live privacy page still said the app has no network capability (now the 4.0 text, 3.0 archived); `Scripts/verify-no-network.sh` check 3 failed on the offline Release because MailConnectivity's transport code is linked from the same package product (check now proves no network entitlement + no reachable app entry point + markers; `NO_NETWORK_PROOF.md`, `NETWORK_AND_PRIVACY_MATRIX.md`). The remaining findings stay open until each fix lands with its test.
 
+## Large-archive performance (owner instruction 2026-11-19, after CLOSE-08)
+
+Owner 2026-11-19: "Optimize mailin for large archives without removing features, losing information, or weakening
+verification and recovery" — seven points, order: database efficiency → first-page responsiveness → adaptive memory →
+overlapping parsing and writing → full regression benchmarks. **No speed-up or 1 GB completion time is promised until
+PERF-05 passes.** Baseline is the pre-optimisation head e918bb0 (CLOSE-08 included, so the scan fix is not credited here).
+
+| ID | Item | State | Commit | Test / evidence |
+|---|---|---|---|---|
+| PERF-00 | Baseline in Release on the 16 GB Mac: first visible messages, import complete, attachment indexing complete, search latency, peak memory, swap; 1 GB archive, many small messages, attachment-heavy, PST/OST; empty and existing archives | in progress | — | Engine matrix (`RealCorpusMatrixTests`, `swift test -c release`) started 2026-11-19 on a worktree at e918bb0 → `~/mailin-perf/baseline-e918bb0/`; app-level figure = the in-app Import Measurement (A11) in a Release build, owner-run; fixtures for 1 GB / attachment-heavy / PST-OST to be built (`gate2_build_real_corpus.py`, Digital Corpora Tbird + PST, mailin PST writer) |
+| PERF-01 | Repeated database work: prepared statements reused per search-index batch; deletion records looked up by index (or a correctly invalidated cache) instead of loading every tombstone per batch; legacy chunk runs backfilled once; batched transactions, one writer | not started | | |
+| PERF-02 | Opening responsive: first page displayed before the exact total-count queries, totals updated after; access limits, filters, sorting, stale-result guard and paging kept | not started | | |
+| PERF-03 | Adaptive memory: `~/Downloads/mailin_adaptive_memory.patch` reviewed, applied, validated — ~4 GiB working-budget ceiling on 16 GB as a tunable soft budget, split across DB caches / parsing / queued batches / attachment processing, bounded by bytes and count, shrinks under pressure, browsing budgets restored after import | not started | | |
+| PERF-04 | Overlap: parse the next batch while the current one is written, one prepared batch ahead with backpressure; parsing concurrency bounded (benchmark vs 8 workers); attachment extraction / OCR limited separately within the shared budget; ordering, atomic checkpoints, cancellation, restart preserved | not started | | |
+| PERF-05 | Verify before claiming: before/after on identical hardware, datasets, build settings, options; counts, duplicates, search, attachment hashes, export round trips, cancel, restart, memory pressure, import into older archives; first-display time apart from fully imported / fully searchable | not started | | |
+
 ## Owner decisions needed
 - OLM reader and TAR/TGZ wrapper: adopted under the 2026-11-06 directive ("support all types") and built (TYPE-06). Still needed from the owner: one real `.olm` export from Outlook for Mac to run against.
 - OUT-05 Apple Mail / Thunderbird interactive import runs.

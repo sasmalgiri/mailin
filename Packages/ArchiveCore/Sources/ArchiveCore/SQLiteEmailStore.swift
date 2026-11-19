@@ -1323,6 +1323,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
         // (SearchChunkIndex "Chunk runs"); the two columns are added here, on
         // every open, for stores created before them. Additive, no version change.
         try ensureSearchDocRunColumns(handle)
+        // PERF-01: rows written before the run columns get their runs once, in
+        // one grouped pass, instead of one scan each the day they are rewritten.
+        try backfillSearchDocRunsIfNeeded(handle)
         // B7: fill (email, folder) memberships the pre-fix v21 backfill
         // dropped at its page boundaries. Additive, once per archive; a
         // failure (disk full, …) never blocks opening — the key stays unset
@@ -2591,8 +2594,32 @@ actor SQLiteEmailStore: EmailArchiveStore {
         var result = BatchInsertResult(attempted: total)
         // Previously-deleted identities — skip them so a re-import can't silently
         // resurrect deleted mail (cleared via "Forget deleted emails").
-        let tombstones: (keys: Set<String>, mids: Set<String>) =
-            respectTombstones ? ((try? loadTombstones()) ?? (keys: [], mids: [])) : (keys: [], mids: [])
+        // PERF-01 (2026-11-19): looked up per message through the tombstone
+        // indexes instead of loading the whole table into memory on every
+        // batch; nothing is prepared when the table is empty.
+        let tombstoneByKey: OpaquePointer?
+        let tombstoneByMessageID: OpaquePointer?
+        if respectTombstones, try scalarInt(db, "SELECT EXISTS(SELECT 1 FROM deletion_tombstones);") == 1 {
+            tombstoneByKey = try prepare(db, "SELECT 1 FROM deletion_tombstones WHERE dedup_key = ? LIMIT 1;")
+            tombstoneByMessageID = try prepare(db, "SELECT 1 FROM deletion_tombstones WHERE message_id = ? LIMIT 1;")
+        } else {
+            tombstoneByKey = nil
+            tombstoneByMessageID = nil
+        }
+        defer { sqlite3_finalize(tombstoneByKey); sqlite3_finalize(tombstoneByMessageID) }
+        func blockedByTombstone(dedupKey: String?, messageID: String?) throws -> Bool {
+            guard tombstoneByKey != nil else { return false }
+            for (stmt, value) in [(tombstoneByKey, dedupKey), (tombstoneByMessageID, messageID)] {
+                guard let value, !value.isEmpty else { continue }
+                sqlite3_reset(stmt); sqlite3_clear_bindings(stmt)
+                bindText(stmt, 1, value)
+                if try stepRow(stmt, db) { return true }
+            }
+            return false
+        }
+        // PERF-01: the search-document statements, prepared once per batch call.
+        let searchStatements = SearchChunkPolicy.isEnabled ? try SearchDocStatements { try prepare(db, $0) } : nil
+        defer { searchStatements?.finalize() }
 
         let insertEmail = try prepare(db, """
             INSERT OR IGNORE INTO emails(
@@ -2648,9 +2675,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
                     let dedupKey = Self.dedupKey(for: email, messageID: mid, policy: dedupPolicy)
                     // Skip anything the user previously deleted (tombstone match
                     // on dedup_key or Message-ID) unless the override is on.
-                    if respectTombstones,
-                       (dedupKey.map { tombstones.keys.contains($0) } ?? false)
-                        || (mid.map { tombstones.mids.contains($0) } ?? false) {
+                    if try blockedByTombstone(dedupKey: dedupKey, messageID: mid) {
                         result.blockedByTombstoneIDs.append(email.id)
                         continue
                     }
@@ -2758,7 +2783,8 @@ actor SQLiteEmailStore: EmailArchiveStore {
                         }
                         // FIND-07: the message's searchable documents, whole, in chunks.
                         if SearchChunkPolicy.isEnabled {
-                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false)
+                            try indexEmailSearchDocuments(db, email: email, deferredBody: locators[email.id]?.bodyDecoded == false,
+                                                          statements: searchStatements)
                         }
                         for domain in email.domains where !domain.isEmpty {
                             sqlite3_reset(insertDomain); sqlite3_clear_bindings(insertDomain)
@@ -6189,18 +6215,6 @@ actor SQLiteEmailStore: EmailArchiveStore {
 
     /// The set of remembered (dedup_key, message_id) identities, loaded once per
     /// insert so re-imports can skip previously-deleted mail without per-row SQL.
-    fileprivate func loadTombstones() throws -> (keys: Set<String>, mids: Set<String>) {
-        let db = try ensureDB()
-        var keys = Set<String>(); var mids = Set<String>()
-        let stmt = try prepare(db, "SELECT dedup_key, message_id FROM deletion_tombstones;")
-        defer { sqlite3_finalize(stmt) }
-        while try stepRow(stmt, db) {
-            if let k = columnTextOptional(stmt, 0), !k.isEmpty { keys.insert(k) }
-            if let m = columnTextOptional(stmt, 1), !m.isEmpty { mids.insert(m) }
-        }
-        return (keys, mids)
-    }
-
     /// Fold the WAL back into the main db file. Keeps the on-disk footprint
     /// honest and bounds WAL growth after a large import.
     func checkpoint() throws {
