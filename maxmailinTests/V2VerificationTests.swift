@@ -2607,8 +2607,116 @@ actor GatedRepository: EmailRepository {
     }
     func fullEmails(ids: [EmailID]) async throws -> [MBOXParser.RawEmail] { [] }
     func exists(ids: [EmailID]) async throws -> Set<EmailID> { [] }
-    func count(query: EmailQuery) async throws -> Int { (datasets[key(query)] ?? []).count }
+    /// PERF-02: counts can be gated too, so a test can hold the total back
+    /// while the first page is already out.
+    private var gateCounts = false
+    func setGateCounts(_ on: Bool) { gateCounts = on }
+    func count(query: EmailQuery) async throws -> Int {
+        if gateCounts {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                gates.append(c); _pending += 1
+            }
+        }
+        return (datasets[key(query)] ?? []).count
+    }
     func delete(ids: [EmailID]) async throws {}
+}
+
+// MARK: - PERF-02 (2026-11-19): the first page before the exact totals
+
+/// Owner instruction 2026-11-19 §3: display the first page before completing
+/// the exact total-count queries; update totals afterward; keep the
+/// stale-result guard. Deterministic through the gated mock: pages and counts
+/// resume only when released, in order.
+@MainActor
+final class FirstPageBeforeTotalsTests: XCTestCase {
+    private func summary(_ name: String, at seconds: TimeInterval) -> EmailSummary {
+        EmailSummary(id: UUID(), messageID: name, subject: name, from: name.lowercased(), date: Date(timeIntervalSince1970: seconds),
+                     bodyPreview: "", hasAttachments: false, sizeBytes: 0)
+    }
+
+    private func waitUntil(_ condition: @escaping () async -> Bool, timeout: TimeInterval = 3,
+                           file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if await condition() { return }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTFail("condition not met within \(timeout) s", file: file, line: line)
+    }
+
+    /// The page is published, loading is over and the first-page hook has run
+    /// while the count query is still pending; the total arrives afterwards.
+    func testFirstPage_isPublishedBeforeTheTotalCountReturns() async throws {
+        let mock = GatedRepository()
+        let rows = (0..<25).map { summary("R\($0)", at: TimeInterval(1_000 - $0)) }
+        await mock.setDatasets(["__all__": rows])
+        await mock.setGateCounts(true)
+        let vm = ArchiveListViewModel(archive: ArchiveDataService(repository: mock), pageSize: 10, maxRetained: 100)
+
+        let load = Task { await vm.loadInitial(awaitTotals: false) }
+        await waitUntil { await mock.pending == 1 }            // the page is waiting
+        XCTAssertTrue(vm.summaries.isEmpty)
+        await mock.release()                                   // page returns; the count is now waiting
+        _ = await load.value
+        XCTAssertEqual(vm.summaries.count, 10, "the first page is on screen")
+        XCTAssertFalse(vm.isLoading)
+        XCTAssertFalse(vm.totalsKnown, "the exact total has not been counted yet")
+        await waitUntil { await mock.pending == 1 }            // the count query is suspended, nothing else
+        XCTAssertEqual(vm.totalCount, 0)
+
+        await mock.release()                                   // the count returns
+        await vm.totalsSettled()
+        XCTAssertTrue(vm.totalsKnown)
+        XCTAssertEqual(vm.totalCount, 25, "the exact total arrives after the page")
+        XCTAssertEqual(vm.summaries.count, 10, "the page did not change")
+    }
+
+    /// A count that belongs to a superseded query is discarded, like its page.
+    func testStaleTotal_ofASupersededQuery_isDiscarded() async throws {
+        let mock = GatedRepository()
+        let all = [summary("A1", at: 100), summary("A2", at: 90)]
+        let c = [summary("C", at: 200)]
+        await mock.setDatasets(["__all__": all, "C": c])
+        await mock.setGateCounts(true)
+        let vm = ArchiveListViewModel(archive: ArchiveDataService(repository: mock), pageSize: 10, maxRetained: 100)
+
+        let loadA = Task { await vm.loadInitial(awaitTotals: false) }
+        await waitUntil { await mock.pending == 1 }     // page A waiting
+        await mock.release()                            // page A out; count A waiting
+        _ = await loadA.value
+        XCTAssertEqual(vm.summaries.map(\.subject), ["A1", "A2"])
+        await waitUntil { await mock.pending == 1 }     // count A suspended
+
+        let loadC = Task { await vm.setQuery(EmailQuery(text: "C"), awaitTotals: false) }   // supersedes A
+        await waitUntil { await mock.pending == 2 }     // count A, page C
+        await mock.release()                            // count A returns → stale → discarded
+        await mock.release()                            // page C returns
+        _ = await loadC.value
+        XCTAssertEqual(vm.summaries.map(\.subject), ["C"])
+        XCTAssertFalse(vm.totalsKnown, "A's count must not have been applied to C")
+        XCTAssertEqual(vm.totalCount, 0)
+        await waitUntil { await mock.pending == 1 }     // count C suspended
+        await mock.release()
+        await vm.totalsSettled()
+        XCTAssertTrue(vm.totalsKnown)
+        XCTAssertEqual(vm.totalCount, 1, "only the current query's total is applied")
+    }
+
+    /// The default call still returns with the totals in, so every existing
+    /// caller that reads `totalCount` right after `loadInitial()` is unchanged.
+    func testLoadInitial_byDefault_waitsForTheTotals() async throws {
+        let mock = GatedRepository()
+        let rows = (0..<3).map { summary("R\($0)", at: TimeInterval(1_000 - $0)) }
+        await mock.setDatasets(["__all__": rows])
+        let vm = ArchiveListViewModel(archive: ArchiveDataService(repository: mock), pageSize: 10, maxRetained: 100)
+        let load = Task { await vm.loadInitial() }
+        await waitUntil { await mock.pending == 1 }
+        await mock.release()
+        _ = await load.value
+        XCTAssertTrue(vm.totalsKnown)
+        XCTAssertEqual(vm.totalCount, 3)
+    }
 }
 
 // MARK: - §2/§3/§4 — schema versioning, full-fidelity persistence, dedup policy

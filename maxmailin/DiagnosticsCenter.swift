@@ -113,10 +113,22 @@ enum LaunchTiming {
     private static var reported = false
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "mailin", category: "launch")
 
-    static func firstPageShown(archiveCount: Int) {
+    private static var totalsReported = false
+
+    /// PERF-02: logged when the first page is on screen — before the exact
+    /// counts, which `totalsKnown` reports separately.
+    static func firstPageShown(rows: Int) {
         guard !reported else { return }
         reported = true
         let seconds = Date().timeIntervalSince(EngineGuard.launchDate)
-        log.notice("first page shown after \(seconds, format: .fixed(precision: 2), privacy: .public) s; archive \(archiveCount, privacy: .public) emails")
+        log.notice("first page shown after \(seconds, format: .fixed(precision: 2), privacy: .public) s; \(rows, privacy: .public) rows")
+    }
+
+    /// The archive's exact total for the first query, when its count query returns.
+    static func totalsKnown(archiveCount: Int) {
+        guard !totalsReported else { return }
+        totalsReported = true
+        let seconds = Date().timeIntervalSince(EngineGuard.launchDate)
+        log.notice("archive total known after \(seconds, format: .fixed(precision: 2), privacy: .public) s; archive \(archiveCount, privacy: .public) emails")
     }
 }

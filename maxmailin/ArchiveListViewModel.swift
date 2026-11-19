@@ -127,10 +127,24 @@ final class ArchiveListViewModel: ObservableObject {
 
     // MARK: - Loading
 
+    /// True once `totalCount` / `reachableCount` describe the current query.
+    /// PERF-02 (2026-11-19): the first page is published before the exact
+    /// counts run, so a reader must not take 0 for "no rows" until this is set.
+    @Published private(set) var totalsKnown = false
+    private var totalsTask: Task<Void, Never>?
+
     /// Load (or reload) from the first page for the current query.
-    func loadInitial() async {
+    ///
+    /// PERF-02: the page is fetched and published first; the two exact
+    /// count queries (the archive's true total for the Free banner, and the
+    /// reachable count under a tier limit) run after it under the same
+    /// revision guard, so a superseded query's totals are discarded like its
+    /// pages. `awaitTotals: false` returns as soon as the page is on screen;
+    /// `totalsSettled()` waits for the counts.
+    func loadInitial(awaitTotals: Bool = true) async {
         queryRevision &+= 1
         let revision = queryRevision
+        totalsTask?.cancel()
         residentPages = []
         startCursor = [:]
         nextCursorByPage = [:]
@@ -140,17 +154,11 @@ final class ArchiveListViewModel: ObservableObject {
         hasPrevious = false
         error = nil
         isLoading = true
+        totalsKnown = false
         do {
-            // The archive's true total for this query: the Free banner says
-            // "First 500 of 526" from it, while the pages themselves come
-            // through the tier's scope.
-            let count = try await archive.unscopedCount(query: query)
-            let reachable = accessLimit == nil ? nil : try await archive.count(query: query)
             let fetched = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
             let (batch, next) = clampToAccessLimit(fetched.batch, next: fetched.next, pageIndex: 0)
-            totalCount = count
-            reachableCount = reachable
             startCursor[0] = .some(nil)
             nextCursorByPage[0] = next
             lastDiscoveredPage = 0
@@ -159,13 +167,47 @@ final class ArchiveListViewModel: ObservableObject {
             hasMore = next != nil
             hasPrevious = false
             isLoading = false
-            LaunchTiming.firstPageShown(archiveCount: count)
+            LaunchTiming.firstPageShown(rows: batch.count)
             _debugOnAppend?(batch)
         } catch {
             guard revision == queryRevision else { return }
             self.error = error
             isLoading = false
+            return
         }
+        let task = Task { @MainActor [weak self] () -> Void in
+            guard let self else { return }
+            await self.loadTotals(revision: revision)
+        }
+        totalsTask = task
+        if awaitTotals { await task.value }
+    }
+
+    /// The exact counts for `revision`'s query, applied only while that query
+    /// is still the current one.
+    private func loadTotals(revision: UInt64) async {
+        let query = self.query
+        let limit = accessLimit
+        do {
+            // The archive's true total for this query: the Free banner says
+            // "First 500 of 526" from it, while the pages themselves come
+            // through the tier's scope.
+            let count = try await archive.unscopedCount(query: query)
+            let reachable = limit == nil ? nil : try await archive.count(query: query)
+            guard revision == queryRevision, !Task.isCancelled else { return }
+            totalCount = count
+            reachableCount = reachable
+            totalsKnown = true
+            LaunchTiming.totalsKnown(archiveCount: count)
+        } catch {
+            guard revision == queryRevision, !Task.isCancelled else { return }
+            self.error = error
+        }
+    }
+
+    /// Waits until the current query's counts are in (or the load failed).
+    func totalsSettled() async {
+        await totalsTask?.value
     }
 
     /// Load the page after the window's tail; drop the head if over the window.
@@ -234,9 +276,9 @@ final class ArchiveListViewModel: ObservableObject {
 
     // MARK: - Query / detail / lifecycle
 
-    func setQuery(_ newQuery: EmailQuery) async {
+    func setQuery(_ newQuery: EmailQuery, awaitTotals: Bool = true) async {
         query = newQuery
-        await loadInitial()
+        await loadInitial(awaitTotals: awaitTotals)
     }
 
     func reload() async { await loadInitial() }
@@ -304,5 +346,8 @@ final class ArchiveListViewModel: ObservableObject {
         isLoading = false
         error = nil
         totalCount = 0
+        totalsKnown = false
+        totalsTask?.cancel()
+        totalsTask = nil
     }
 }

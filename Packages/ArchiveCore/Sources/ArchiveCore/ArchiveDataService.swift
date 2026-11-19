@@ -65,6 +65,13 @@ final class ArchiveDataService {
         try await repository.count(query: query)
     }
 
+    /// PERF-02: whether the archive holds any email at all — one row, no
+    /// COUNT. The shell decides "show the list" from this and lets the exact
+    /// total arrive after the first page.
+    func hasEmails() async throws -> Bool {
+        try await !repository.page(query: .all, cursor: nil, limit: 1).summaries.isEmpty
+    }
+
     /// Summaries for a specific id batch (no bodies).
     func summaries(ids: [EmailID]) async throws -> [EmailSummary] {
         try await repository.summaries(ids: ids)

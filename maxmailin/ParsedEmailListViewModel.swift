@@ -555,7 +555,8 @@ class ParsedEmailListViewModel: ObservableObject {
     private var modelSearchNotice: String?
 
     private func refreshModelSearchNotice() async {
-        guard typedSearchRunsOnModel, pager.totalCount == 0 else { modelSearchNotice = nil; return }
+        // PERF-02: a total of 0 means "no rows" only once the count is in.
+        guard typedSearchRunsOnModel, pager.totalsKnown, pager.totalCount == 0 else { modelSearchNotice = nil; return }
         modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive, scope: currentArchiveQuery))
     }
     @Published var aiPinnedIDs: Set<UUID>? = nil
@@ -772,11 +773,12 @@ class ParsedEmailListViewModel: ObservableObject {
         let revision = windowRevision &+ 1
         windowRevision = revision
         isLoadingPage = true
-        let total = (try? await archive.count()) ?? 0
+        // PERF-02: whether to show the list is a one-row question; the exact
+        // archive total is counted after the first page is on screen.
+        let hasAny = (try? await archive.hasEmails()) ?? false
         guard revision == windowRevision else { return }
-        archiveTotalCount = total
-        isParsed = total > 0
-        showParsedList = total > 0
+        isParsed = hasAny
+        showParsedList = hasAny
         await refreshSenderAggregates()
         let compiled = pagerQuery
         lastPagedQuery = compiled
@@ -785,13 +787,22 @@ class ParsedEmailListViewModel: ObservableObject {
         // N" notice agree with the rows the data layer returns. Read on every reload, so a
         // purchase, expiry or restore takes effect at the next refresh.
         pager.accessLimit = archive.accessLimit
-        await pager.setQuery(compiled)
+        await pager.setQuery(compiled, awaitTotals: false)
         forwardPagesLoaded = 1
-        guard revision == windowRevision else { return }
-        await refreshModelSearchNotice()
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
+        // The exact counts, after the page: the query's total for the headers
+        // and the Free notice, the archive's total for the banners.
+        await pager.totalsSettled()
+        guard revision == windowRevision else { return }
+        queryTotalCount = pager.totalCount
+        await refreshModelSearchNotice()
+        // The notice and the header count are published by the refinement pass.
+        applyFilters()
+        let total = (try? await archive.count()) ?? archiveTotalCount
+        guard revision == windowRevision else { return }
+        archiveTotalCount = total
         if isParsed && isProductionArchive {
             // Part L: incremental persisted thread-key backfill (no-op once
             // every stored email has a key).
@@ -814,13 +825,19 @@ class ParsedEmailListViewModel: ObservableObject {
         let compiled = pagerQuery
         lastPagedQuery = compiled
         pagedSearchText = searchText
-        await pager.setQuery(compiled)
+        await pager.setQuery(compiled, awaitTotals: false)
         forwardPagesLoaded = 1
-        guard revision == windowRevision else { return }
-        await refreshModelSearchNotice()
         guard revision == windowRevision else { return }
         await hydrateWindow(revision: revision)
         isLoadingPage = false
+        // PERF-02: the exact total after the page, then the no-match notice
+        // (which needs the total to say "no rows" honestly).
+        await pager.totalsSettled()
+        guard revision == windowRevision else { return }
+        queryTotalCount = pager.totalCount
+        await refreshModelSearchNotice()
+        // The notice and the header count are published by the refinement pass.
+        applyFilters()
     }
 
     /// Whether more pages can be fetched forward (free tier caps the paging
