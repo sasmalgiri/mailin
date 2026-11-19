@@ -39,6 +39,7 @@
 //
 
 import Foundation
+import os
 import CryptoKit
 import Observation
 import os
@@ -950,7 +951,8 @@ final class BulkImportCoordinator {
                             self?.live.fileFraction = prog
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
-                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                        // PERF-04: the parser prepares the next batch while this one commits.
+                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
                                 for item in imported {
@@ -962,6 +964,7 @@ final class BulkImportCoordinator {
                         }
                         let renderDirectory = SourceCopies.directory(in: store.storeDirectory)
                             .appendingPathComponent(hash, isDirectory: true)
+                        do {
                         fileReport = try await largeEngine.importLargeSingleMessage(
                             fileURL: importURL,
                             kind: largeKind,
@@ -973,6 +976,13 @@ final class BulkImportCoordinator {
                         ) { @Sendable imported in
                             try await batchSink.send(imported)
                         }
+                        } catch {
+                            // The write in flight finishes (or fails) before anything
+                            // else touches this file's report or checkpoint.
+                            try? await batchSink.drain()
+                            throw error
+                        }
+                        try await batchSink.drain()
                     } else if offsetEligible {
                         var engine = OffsetImportEngine()
                         if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
@@ -983,7 +993,8 @@ final class BulkImportCoordinator {
                             self?.live.fileFraction = prog
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
-                        let batchSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
+                        // PERF-04: the parser prepares the next batch while this one commits.
+                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
                                 for item in imported {
@@ -993,6 +1004,7 @@ final class BulkImportCoordinator {
                             }
                             try await persistBatch(imported.map(\.email))
                         }
+                        do {
                         fileReport = try await engine.importMessages(
                             fileURL: importURL,
                             senderEmail: options.senderEmail,
@@ -1004,31 +1016,43 @@ final class BulkImportCoordinator {
                         ) { @Sendable imported in
                             try await batchSink.send(imported)
                         }
+                        } catch {
+                            // The write in flight finishes (or fails) before anything
+                            // else touches this file's report or checkpoint.
+                            try? await batchSink.drain()
+                            throw error
+                        }
+                        try await batchSink.drain()
                     } else {
                         let progressSink = MainActorSink<Double> { [weak self] prog in
                             self?.live.fileFraction = prog
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
-                        let batchSink = MainActorSink<[MBOXParser.RawEmail]> { batch in
+                        // PERF-04: the parser prepares the next batch while this one commits.
+                        let batchSink = PipelinedBatchSink<[MBOXParser.RawEmail]> { batch in
                             // Locators belong to the batch that set them (the large-message route below).
                             batchLocators.removeAll(keepingCapacity: true)
                             try await persistBatch(batch)
+                        }
+                        // The two sinks share one writer: a large-message batch
+                        // waits for the ordinary batch in flight, and vice versa,
+                        // so the file's order is kept across both routes.
+                        let largeSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
+                            try await batchSink.drain()
+                            batchLocators.removeAll(keepingCapacity: true)
+                            if options.recordLocators {
+                                for item in imported {
+                                    batchLocators[item.email.id] =
+                                        (item.locator, item.bodyWasDecoded, item.parts)
+                                }
+                            }
+                            try await persistBatch(imported.map(\.email))
                         }
                         // CLOSE-01 follow-up: with the offset engine on, a large
                         // .emlx in a library folder or .emlx/.msg inside an
                         // archive is imported by range, as a file of its own is.
                         var largeRoute: LargeMessageRoute? = nil
                         if options.useOffsetEngine {
-                            let largeSink = MainActorSink<[OffsetImportEngine.Imported]> { imported in
-                                batchLocators.removeAll(keepingCapacity: true)
-                                if options.recordLocators {
-                                    for item in imported {
-                                        batchLocators[item.email.id] =
-                                            (item.locator, item.bodyWasDecoded, item.parts)
-                                    }
-                                }
-                                try await persistBatch(imported.map(\.email))
-                            }
                             largeRoute = LargeMessageRoute(
                                 engine: largeEngine,
                                 keepDirectory: SourceCopies.directory(in: store.storeDirectory)
@@ -1069,13 +1093,26 @@ final class BulkImportCoordinator {
                                 containerResume: containerResume,
                                 onContainerMemberFinished: { @Sendable cursor in try await cursorSink.send(cursor) },
                                 largeMessages: largeRoute,
-                                onBatch: { @Sendable batch in try await batchSink.send(batch) }
+                                onBatch: { @Sendable batch in
+                                    // An ordinary batch waits for a large-message write in flight.
+                                    try await largeSink.drain()
+                                    try await batchSink.send(batch)
+                                }
                             )
+                            try await largeSink.drain()
+                            try await batchSink.drain()
                         } catch let error as ContainerWalkError {
+                            try? await largeSink.drain()
+                            try? await batchSink.drain()
                             // The saved place no longer matches: drop it, so the
                             // next import walks from the first member (the
                             // ordinal checkpoint still skips what is committed).
                             await checkpoints.clearContainerCursor(sha256: hash)
+                            throw error
+                        } catch {
+                            // The writes in flight finish before this file's report is used.
+                            try? await largeSink.drain()
+                            try? await batchSink.drain()
                             throw error
                         }
                     }
@@ -1434,4 +1471,52 @@ final class MainActorSink<Input: Sendable> {
     private let body: (Input) async throws -> Void
     init(_ body: @escaping (Input) async throws -> Void) { self.body = body }
     func send(_ input: Input) async throws { try await body(input) }
+}
+
+/// PERF-04 (owner instruction 2026-11-19 §5): one prepared batch ahead.
+///
+/// `send` waits for the write before it, starts this write on its own task
+/// and returns, so the parser prepares the next batch while the store
+/// commits this one. Writes stay serial and in order — never more than one
+/// in flight — so ordinals, atomic checkpoints and the per-batch outcome are
+/// exactly what the serial path produced; the only change is that parsing
+/// and committing overlap by one batch (two batches resident at most, which
+/// `ImportMemoryPolicy.batchSourceBytes` accounts for). A failed write
+/// surfaces at the next `send` or at `drain`, so the parser stops within one
+/// batch; cancelling the task that waits cancels the write in flight.
+/// `drain` must run before a file's report or checkpoint is used.
+final class PipelinedBatchSink<Input: Sendable>: @unchecked Sendable {
+    /// The sink bodies run on whatever executor calls `send`, as
+    /// `MainActorSink`'s did; the box only states that to the compiler.
+    private struct Body: @unchecked Sendable { let run: (Input) async throws -> Void }
+    private let body: Body
+    /// The write in flight. Touched by the parser's task and, in the
+    /// container route, by the other sink's body, so it sits under a lock.
+    private let inFlight = OSAllocatedUnfairLock<Task<Void, Error>?>(initialState: nil)
+
+    init(_ body: @escaping (Input) async throws -> Void) { self.body = Body(run: body) }
+
+    /// Waits for the previous write, then starts this one and returns.
+    func send(_ input: Input) async throws {
+        try await drain()
+        try Task.checkCancellation()
+        let body = self.body
+        let task = Task { try await body.run(input) }
+        inFlight.withLock { $0 = task }
+    }
+
+    /// Waits for the write in flight (if any) and rethrows its error.
+    func drain() async throws {
+        let task = inFlight.withLock { slot -> Task<Void, Error>? in
+            let current = slot
+            slot = nil
+            return current
+        }
+        guard let task else { return }
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
 }

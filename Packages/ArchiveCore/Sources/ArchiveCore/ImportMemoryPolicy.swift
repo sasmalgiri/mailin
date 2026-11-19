@@ -48,11 +48,16 @@ enum ImportMemoryPolicy {
         min(8_192, max(2_048, storeBudget.cacheKB / 64))
     }
 
+    /// Batches that can be resident at once: the one being committed and the
+    /// one the parser prepares meanwhile (PERF-04, one batch ahead).
+    static let residentBatches: UInt64 = 2
+
     /// A quarter of the process budget, and no more than half the remaining
-    /// process headroom, may be represented by the next parsed batch.
+    /// process headroom, may be represented by the batches in flight; each
+    /// batch gets its share of that.
     static func batchSourceBytes(limit: UInt64, footprint: UInt64) -> Int {
         let headroom = limit > footprint ? limit - footprint : 0
-        let resident = min(1_024 * mib, min(limit / 4, headroom / 2))
+        let resident = min(1_024 * mib, min(limit / 4, headroom / 2)) / residentBatches
         return max(1_048_576, Int(Double(resident) / BatchEnvelope.measuredParsedExpansion))
     }
 
