@@ -462970,6 +462970,136 @@
           }
         }
       }
+    },
+    "Google Sign-in for Gmail" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Google-Anmeldung für Gmail"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Inicio de sesión de Google para Gmail"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connexion Google pour Gmail"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail के लिए Google साइन-इन"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accesso Google per Gmail"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail の Google サインイン"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail용 Google 로그인"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Login do Google para o Gmail"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 的 Google 登录"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 的 Google 登入"
+          }
+        }
+      }
+    },
+    "Gmail now connects through Google's own sign-in page — no app password to create. Change server mail works for Gmail too: mark, label, move to Trash and restore, each change listed first. Accounts added with an app password keep working." : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail verbindet sich jetzt über Googles eigene Anmeldeseite – kein App-Passwort mehr nötig. „Server-Mail ändern“ funktioniert auch für Gmail: markieren, Labels setzen, in den Papierkorb verschieben und wiederherstellen, jede Änderung wird vorher aufgelistet. Konten, die mit einem App-Passwort hinzugefügt wurden, funktionieren weiterhin."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail ahora se conecta a través de la propia página de inicio de sesión de Google: no hay que crear ninguna contraseña de aplicación. Cambiar el correo del servidor también funciona con Gmail: marcar, etiquetar, mover a la Papelera y restaurar, con cada cambio listado antes. Las cuentas añadidas con una contraseña de aplicación siguen funcionando."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail se connecte désormais par la page de connexion de Google : plus de mot de passe d'application à créer. Modifier le courrier sur le serveur fonctionne aussi pour Gmail : marquer, libeller, placer dans la corbeille et restaurer, chaque modification étant listée au préalable. Les comptes ajoutés avec un mot de passe d'application continuent de fonctionner."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail अब Google के अपने साइन-इन पेज से जुड़ता है — कोई ऐप पासवर्ड बनाने की ज़रूरत नहीं। सर्वर मेल बदलना Gmail के लिए भी काम करता है: चिह्नित करें, लेबल लगाएँ, ट्रैश में भेजें और वापस लाएँ, हर बदलाव पहले सूचीबद्ध होता है। ऐप पासवर्ड से जोड़े गए खाते काम करते रहते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail ora si collega tramite la pagina di accesso di Google: nessuna password per le app da creare. Modifica posta sul server funziona anche con Gmail: contrassegnare, etichettare, spostare nel Cestino e ripristinare, con ogni modifica elencata prima. Gli account aggiunti con una password per le app continuano a funzionare."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail は Google 自身のサインインページで接続するようになり、アプリパスワードを作る必要がなくなりました。「サーバ上のメールを変更」も Gmail で使えます。マーク、ラベル付け、ゴミ箱への移動と復元ができ、各変更は事前に一覧表示されます。アプリパスワードで追加したアカウントはそのまま使えます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "이제 Gmail은 Google의 자체 로그인 페이지를 통해 연결되며 앱 비밀번호를 만들 필요가 없습니다. 서버 메일 변경도 Gmail에서 작동합니다. 표시, 라벨 지정, 휴지통으로 이동 및 복원이 가능하며 각 변경 사항이 먼저 목록으로 표시됩니다. 앱 비밀번호로 추가한 계정은 계속 작동합니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O Gmail agora se conecta pela própria página de login do Google — sem precisar criar uma senha de app. Alterar e-mail no servidor também funciona com o Gmail: marcar, rotular, mover para a Lixeira e restaurar, com cada alteração listada antes. As contas adicionadas com uma senha de app continuam funcionando."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 现在通过 Google 自己的登录页面连接，无需再创建应用专用密码。“更改服务器邮件”也适用于 Gmail：标记、添加标签、移到废纸篓和恢复，每项更改都会先列出。使用应用专用密码添加的账户继续可用。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gmail 現在透過 Google 自己的登入頁面連線，無需再建立應用程式密碼。「變更伺服器郵件」也適用於 Gmail：標記、加上標籤、移到垃圾桶和還原，每項變更都會先列出。使用應用程式密碼加入的帳號繼續可用。"
+          }
+        }
+      }
     }
   },
   "version" : "1.1"

@@ -67,8 +67,10 @@ is followed with a bearer token.
 
 ### Hosts the connected edition may contact (exact)
 
-4.0 (owner 2026-11-14): Gmail connects over IMAP with an app password (`MailinGmailSignInMode = imap`), so the
-three Google API rows below are **not used by 4.0**; they apply when Google sign-in ships in 4.0.x. Outlook /
+4.0 (owner 2026-11-14) connected Gmail over IMAP with an app password (`MailinGmailSignInMode = imap`), so the
+three Google API rows below were not used by 4.0. **4.0.1 (owner 2026-11-19, Google verified the restricted scopes):
+`MailinGmailSignInMode = oauth` — the three Google API rows are the Gmail path; the IMAP row stays for accounts
+added in 4.0 with an app password.** Outlook /
 Microsoft 365 capture asks for `Mail.Read`, `User.Read`, `offline_access`; `Mail.Send` / `Mail.ReadWrite` only
 when Send mail / Change server mail is switched on.
 
@@ -79,7 +81,7 @@ when Send mail / Change server mail is switched on.
 | Google | `gmail.googleapis.com` | capture (`profile`, `labels`, `messages`, `messages/{id}?format=raw`, `history`), send (`upload/…/messages/send`), server actions (`modify`, `trash`, `untrash`) | app (`GmailAdapter`, `GmailSendSubmitter`, `GmailActionExecutor`) |
 | Microsoft | `login.microsoftonline.com` (`/common/oauth2/v2.0/authorize`, `/token`); personal accounts may continue on `login.live.com` inside the sign-in window | sign-in, token exchange / refresh | sign-in window; app for `/token` |
 | Microsoft | `graph.microsoft.com` | capture (mail folders, delta, `/$value`), `sendMail`, PATCH / move | app (`GraphAdapter`, `GraphSendSubmitter`, `GraphActionExecutor`) |
-| Google (4.0, Gmail over IMAP) | `imap.gmail.com:993`, `smtp.gmail.com:465` | IMAP capture (X-GM-MSGID / X-GM-LABELS, EXAMINE + BODY.PEEK), SMTP send with the same app password; **no server changes** (Change server mail unavailable for Gmail-IMAP) | app (Network.framework, TLS) |
+| Google (Gmail over IMAP: accounts added in 4.0 with an app password) | `imap.gmail.com:993`, `smtp.gmail.com:465` | IMAP capture (X-GM-MSGID / X-GM-LABELS, EXAMINE + BODY.PEEK), SMTP send with the same app password; **no server changes** (Change server mail unavailable for Gmail-IMAP) | app (Network.framework, TLS) |
 | iCloud Mail | `imap.mail.me.com:993`, `smtp.mail.me.com:587` | IMAP capture / actions, SMTP send | app (Network.framework, TLS before AUTH) |
 | Fastmail | `imap.fastmail.com:993`, `smtp.fastmail.com:465` | same | app |
 | Other IMAP | the host and port the user enters | same | app |

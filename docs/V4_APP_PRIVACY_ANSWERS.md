@@ -1,4 +1,15 @@
-# App Store Connect ▸ App Privacy — answers for v4.0 (V4-14), updated 2026-11-14
+# App Store Connect ▸ App Privacy — answers for v4.0 / 4.0.1 (V4-14), updated 2026-11-19
+
+**4.0.1 (build 1001, owner 2026-11-19):** Google verified the restricted Gmail scopes, so the submitted build carries
+`MailinGmailSignInMode = oauth`: Gmail connects with **Google sign-in and the Gmail API** (`accounts.google.com`,
+`oauth2.googleapis.com`, `gmail.googleapis.com`, `www.googleapis.com`; `gmail.readonly` + `gmail.labels` for Preserve
+mail, `gmail.send` / `gmail.modify` only when Send mail / Change server mail is switched on). Every "4.0 … IMAP + app
+password" statement below describes 4.0 and the accounts added with it, which keep working over IMAP. **None of the
+App Privacy answers change:** Google is still the user's own provider, reached directly; nothing is collected. What
+does change for the submission: the privacy page (now the 4.0.1 text, Limited Use section current), review notes
+(Gmail = Google sign-in page; Change server mail works for Gmail), the demo Gmail account (a Google password the
+reviewer can type on Google's page — see `RELEASE_4_0_CHECKLIST.md` §3), and item 5 below (the sign-in window now
+shows Google's page as well as Microsoft's).
 
 **4.0 facts (owner decision 2026-11-14):** mailin 4.0 (build 1000) is released on the public App Store record
 (`com.ecosanskriti.mailin`) as the **connected edition** (archive scheme "maxmailin Connected", configuration

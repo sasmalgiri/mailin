@@ -20,6 +20,10 @@ Related: [`V4_ONLINE_IMPLEMENTATION.md`](V4_ONLINE_IMPLEMENTATION.md) (owner pro
 > scopes (§1.4). A missing key reads as `imap`; any other value fails `ConnectedReleaseCheck` and
 > `Scripts/check-connected-release.sh` (step 5 prints the mode). Accounts already added with Google sign-in keep
 > working in either mode (re-sign-in still uses §1). Packet §1 below is for 4.0.x.
+>
+> **4.0.1 (owner 2026-11-19):** Google's consent screen is In production and the restricted `gmail.*` scopes show
+> Verified (owner-attested). `Info-Connected.plist` now carries **`MailinGmailSignInMode = oauth`**: Add account's
+> one "Gmail" entry is Google sign-in (§1). Accounts added in 4.0 with an app password keep working over IMAP (§3).
 
 | Fact | Value | Source |
 |---|---|---|

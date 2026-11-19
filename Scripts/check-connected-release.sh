@@ -95,8 +95,8 @@ echo "5. Gmail sign-in mode"
 MODE_RAW=$(read_key MailinGmailSignInMode)
 MODE=$(printf '%s' "$MODE_RAW" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
 case "$MODE" in
-    imap)  pass "MailinGmailSignInMode = imap (Gmail over IMAP with an app password; the 4.0 App Store mode)" ;;
-    oauth) pass "MailinGmailSignInMode = oauth (Google sign-in; TestFlight / demo / 4.0.x mode)" ;;
+    imap)  pass "MailinGmailSignInMode = imap (Gmail over IMAP with an app password; the 4.0 App Store mode, before Google verification)" ;;
+    oauth) pass "MailinGmailSignInMode = oauth (Google sign-in, Gmail API; the App Store mode from 4.0.1 — Google verified the restricted scopes 2026-11-19)" ;;
     "")    pass "MailinGmailSignInMode missing: the app reads it as imap (Gmail over IMAP with an app password)" ;;
     *)     fail "MailinGmailSignInMode is '$MODE_RAW', expected imap or oauth" ;;
 esac

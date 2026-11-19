@@ -9469,6 +9469,11 @@ final class MailWorkspaceTests: XCTestCase {
                        "both Filters & Tools sheets (iPhone and iPad layouts) close before the file picker opens")
         let whatsNew = try source("WhatsNewView.swift")
         XCTAssertTrue(whatsNew.contains("ReleaseNote(version: \"4.0\""), "What's New has a 4.0 entry")
+        // 4.0.1: Google sign-in for Gmail, connected edition only; the offline edition shows no 4.0.1 note.
+        XCTAssertTrue(whatsNew.contains("ReleaseNote(version: \"4.0.1\""), "What's New has a 4.0.1 entry")
+        XCTAssertTrue(whatsNew.contains("Google Sign-in for Gmail"))
+        XCTAssertTrue(WhatsNewView.shouldShow(current: "4.0.1", lastSeen: "3.0.1"), "an upgrade from 3.0.1 sees the 4.0 and 4.0.1 notes")
+        XCTAssertFalse(WhatsNewView.shouldShow(current: "4.0.1", lastSeen: "4.0.1"))
     }
 
     /// 2026-11-15: Xcode saved its own copy of the string catalog over translations written by
@@ -11545,12 +11550,13 @@ final class V416GmailIMAPTests: XCTestCase {
         XCTAssertTrue(ConnectedMailErrorText.isPresentable(guidance))
     }
 
-    /// Info-Connected.plist ships "imap" (the 4.0 App Store default); the
-    /// release check accepts imap / oauth / missing and refuses anything else;
-    /// the release script reports the mode.
-    func testV416_infoPlistIsImap_releaseCheckAcceptsBothModes_scriptReportsMode() throws {
+    /// Info-Connected.plist ships "oauth" from 4.0.1 (owner 2026-11-19: Google
+    /// verified the restricted Gmail scopes; 4.0 shipped "imap"); the release
+    /// check accepts imap / oauth / missing and refuses anything else; the
+    /// release script reports the mode.
+    func testV416_infoPlistIsOAuth_releaseCheckAcceptsBothModes_scriptReportsMode() throws {
         let plist = try XCTUnwrap(NSDictionary(contentsOf: Self.repo.appendingPathComponent("Info-Connected.plist")) as? [String: Any])
-        XCTAssertEqual(plist["MailinGmailSignInMode"] as? String, "imap")
+        XCTAssertEqual(plist["MailinGmailSignInMode"] as? String, "oauth", "4.0.1 ships Google sign-in for Gmail")
         func info(_ mode: String?) -> [String: Any] {
             var d: [String: Any] = ["CFBundleIdentifier": "com.ecosanskriti.mailin",
                                     "MailinGmailClientID": "123456789012-abcdefghijklmnop0123456789qrstuv.apps.googleusercontent.com",
@@ -11568,8 +11574,15 @@ final class V416GmailIMAPTests: XCTestCase {
         let script = try String(contentsOf: Self.repo.appendingPathComponent("Scripts/check-connected-release.sh"), encoding: .utf8)
         XCTAssertTrue(script.contains("read_key MailinGmailSignInMode"))
         XCTAssertTrue(script.contains("imap)") && script.contains("oauth)"), "both modes PASS and are printed")
-        // This build: the connected scheme carries "imap"; the offline build has no key (read as imap).
-        XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: MailProviderChoice.bundleInfo()), .imap)
+        // This build: the connected scheme carries "oauth" (Google sign-in offered); the offline build has
+        // no key and reads as imap (it offers no account at all).
+        let bundleInfo = MailProviderChoice.bundleInfo()
+        if bundleInfo[MailProviderChoice.gmailSignInModeKey] != nil {
+            XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: bundleInfo), .oauth, "connected build: 4.0.1 offers Google sign-in")
+            XCTAssertEqual(MailProviderChoice.offered(info: bundleInfo).first, .gmail)
+        } else {
+            XCTAssertEqual(MailProviderChoice.gmailSignInMode(info: bundleInfo), .imap)
+        }
     }
 }
 
