@@ -535,9 +535,18 @@ struct ContentView: View {
                 if modelVM.showParsedList {
                     hubSidebar
                 } else {
-                    Text("Import an archive to begin")
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // A named area filling the column (accessibility audit of
+                    // a Release launch on an empty archive, CLOSE-06): the
+                    // column's own wrapper was announced with no description.
+                    // Color.clear sizes the named area to the whole column
+                    // (a framed VStack reached AX at the text's own size).
+                    ZStack {
+                        Color.clear
+                        Text("Import an archive to begin")
+                            .foregroundColor(.secondary)
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel(String(localized: "Folders"))
                 }
             }
             // Wide enough that full labels ("Relationship Graph",

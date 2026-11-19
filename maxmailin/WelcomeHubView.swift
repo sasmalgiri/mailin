@@ -159,9 +159,10 @@ struct WelcomeHubView: View {
                 .accessibilityLabel("Unlock Pro — view subscription options")
             }
 
+            // Primary, not secondary: the audit measured this line under 4.5:1 (CLOSE-06).
             Text(personaManager.config.emptyStateMessage)
                 .font(Typography.subheadline)
-                .foregroundColor(.secondary)
+                .foregroundColor(.primary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 440)
                 .padding(.top, Spacing.xxSmall)
@@ -290,9 +291,11 @@ struct WelcomeHubView: View {
                 Text(category.title)
                     .font(Typography.headline)
                 if category.isPrimary {
+                    // Primary text on the tinted capsule: the persona colour on
+                    // its own 12 % tint failed contrast (CLOSE-06).
                     Text("FOR YOU")
                         .font(.system(.caption2, design: .rounded).weight(.bold))
-                        .foregroundColor(persona.accentColor)
+                        .foregroundColor(.primary)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(persona.accentColor.opacity(0.12))
@@ -305,6 +308,9 @@ struct WelcomeHubView: View {
                     featureCard(feature)
                 }
             }
+            // The grid is announced by its section's name (it had no description).
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(category.title)
         }
         .opacity(animateCards ? 1 : 0)
         .offset(y: animateCards ? 0 : 12)
