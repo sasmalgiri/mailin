@@ -50,11 +50,10 @@ text to paste; Google Auth Platform for project mailin-mail):
 
 - [x] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
       (`FIVE_JOBS_TRACKER.md` § v4.0, release-audit note) — 9782aa6 is on `v3-architecture` and `main`.
-- [ ] **Privacy page published with the 4.0 text.** `https://sasmalgiri.github.io/mailin/privacy/` must say
-      "Effective Date: November 14, 2026 (version 4.0)" and list `imap.gmail.com` / `graph.microsoft.com`; the
-      "Google API Services" heading must say "(applies only when Google sign-in ships)". It did on the morning of
-      2026-11-19, showed the 4.0.1 text for about an hour, and is re-published by the revert (the agent verifies and
-      ticks this line). The 3.0 text is at `/privacy/3.0.html`.
+- [x] **Privacy page published with the 4.0 text** (re-verified 2026-11-19 after the revert, `main` = 316dc78):
+      `https://sasmalgiri.github.io/mailin/privacy/` says "Effective Date: November 14, 2026 (version 4.0)", lists
+      `imap.gmail.com` / `graph.microsoft.com`, and the Google API Services heading says "(applies only when Google
+      sign-in ships)". The 4.0.1 text was live for about an hour in between. The 3.0 text is at `/privacy/3.0.html`.
 - [x] Xcode run destination is **My Mac** (2026-11-19); repeat the archive for **Any iOS Device** for the iPhone / iPad build.
 
 ## 1. Archive, validate, upload
