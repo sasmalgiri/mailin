@@ -14,15 +14,25 @@ iCloud / Fastmail / other IMAP with passwords; no cloud AI. Tick each line on th
 - [ ] Owner, in the app: delete the 8 empty test drafts; confirm "Remove and Delete Mail…" for the removed
       sasmalgiri account; try Change server mail on the Outlook account; look at Live Mail on an iPhone / iPad.
 
+## Status 2026-11-19 (candidate 4bd48b2, agent part done)
+
+- [x] Release-configuration unit run on 20cbfa2: Release 429 / Release-Connected 429, only the two StoreKit
+      failures, fixed and re-verified 11/11 at 0ef44be (LIFE-06). Package `swift test -c release` 729/0 + opt-in 29/29.
+- [x] Five-journey Mac UI test and main-window accessibility audit PASS on Release and Release-Connected (6da0b78).
+- [x] Privacy page live with the 4.0 text (checked over HTTPS 2026-11-19); `docs/privacy` identical on `main`.
+- [x] `Info-Connected.plist`: `MailinGmailSignInMode = imap`, Gmail and Graph client IDs present, Graph redirect
+      `msauth.$(PRODUCT_BUNDLE_IDENTIFIER)://auth`. `ITSAppUsesNonExemptEncryption` not set (owner's declaration, §3).
+- [x] Xcode: active scheme "maxmailin Connected", destination My Mac; the scheme's Archive action = Release-Connected.
+- [ ] Not committed on purpose: `mailin.xcodeproj/xcshareddata/xcodecloud/manifest.json` (Xcode Cloud manifest
+      inside the old 1.0 `mailin.xcodeproj`, not the release project) — delete it or leave it untracked.
+
 ## 0. Before archiving
 
-- [ ] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
-      (`FIVE_JOBS_TRACKER.md` § v4.0, release-audit note).
-- [ ] **Privacy page published.** Merge / publish the branch to the GitHub Pages site and open
-      `https://sasmalgiri.github.io/mailin/privacy/` in a browser: it must say "Effective Date: November 14, 2026
-      (version 4.0)" and list `imap.gmail.com` / `graph.microsoft.com`. The 3.0 text is at `/privacy/3.0.html`.
-      Until this is live, do not submit (App Review reads the URL).
-- [ ] Xcode run destination is **My Mac** (then repeat the archive for **Any iOS Device** for the iPhone / iPad build).
+- [x] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
+      (`FIVE_JOBS_TRACKER.md` § v4.0, release-audit note) — 9782aa6 is on `v3-architecture` and `main`.
+- [x] **Privacy page published.** `https://sasmalgiri.github.io/mailin/privacy/` says version 4.0 and lists
+      `imap.gmail.com` / `graph.microsoft.com` (2026-11-19). The 3.0 text is at `/privacy/3.0.html`.
+- [x] Xcode run destination is **My Mac** (2026-11-19); repeat the archive for **Any iOS Device** for the iPhone / iPad build.
 
 ## 1. Archive, validate, upload
 
