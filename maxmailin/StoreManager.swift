@@ -630,25 +630,37 @@ class StoreManager: ObservableObject {
 
     // MARK: - Entitlement Check
 
-    func checkEntitlements() async {
+    /// `delivered`: the transaction `Transaction.updates` just handed over.
+    func checkEntitlements(delivered: Transaction? = nil) async {
         var highestTier: PurchaseTier = .free
         var hasLifetime = false
         var latestExpiration: Date?
+        let now = Date()
 
-        for await result in Transaction.currentEntitlements {
-            guard let transaction = try? checkVerified(result) else { continue }
-            guard transaction.revocationDate == nil else { continue }
+        // What grants access now: a verified, unrevoked transaction for one
+        // of the six products, not replaced by an upgrade, and — for a
+        // subscription — inside its paid period. `currentEntitlements` is
+        // read first; the transaction history and the delivered update are
+        // read as well because, on macOS (measured 2026-11-19, StoreKit test
+        // environment), `currentEntitlements` still returns the previous,
+        // expired period for about a second after a renewal or a re-purchase
+        // has reached `Transaction.updates` and `Transaction.all` — the
+        // update's own pass then dropped a live plan to Free and nothing
+        // re-checked until the next activation.
+        func grant(_ transaction: Transaction) {
+            guard transaction.revocationDate == nil, !transaction.isUpgraded else { return }
             // A lapsed subscription grants nothing, even if StoreKit's
             // entitlement list still carries it (seen in the StoreKit test
             // environment right after expiry).
-            if let expiry = transaction.expirationDate, expiry <= Date() { continue }
+            if let expiry = transaction.expirationDate, expiry <= now { return }
 
             let isProProduct = StoreManager.professionalProductIDs.contains(transaction.productID)
             let isPersonalProduct = StoreManager.personalProductIDs.contains(transaction.productID)
+            guard isProProduct || isPersonalProduct else { return }
 
             if isProProduct {
                 highestTier = .professional
-            } else if isPersonalProduct && highestTier < .personal {
+            } else if highestTier < .personal {
                 highestTier = .personal
             }
 
@@ -665,6 +677,21 @@ class StoreManager: ObservableObject {
             }
         }
 
+        for await result in Transaction.currentEntitlements {
+            guard let transaction = try? checkVerified(result) else { continue }
+            grant(transaction)
+        }
+        // History: also what was ever paid for (A08 below).
+        var historical: PurchaseTier = .free
+        for await result in Transaction.all {
+            guard let transaction = try? checkVerified(result) else { continue }
+            grant(transaction)
+            guard transaction.revocationDate == nil else { continue }
+            if StoreManager.professionalProductIDs.contains(transaction.productID) { historical = .professional }
+            else if StoreManager.personalProductIDs.contains(transaction.productID) { historical = max(historical, .personal) }
+        }
+        if let delivered { grant(delivered) }
+
         // Audit 2026-11-06 A08: current entitlements say what is active now;
         // the transaction history says what was ever paid for. An expired
         // subscription or a plan bought on another Mac with this Apple ID
@@ -672,12 +699,6 @@ class StoreManager: ObservableObject {
         // so a clean installation recovers the existing-data policy without
         // the old preferences.
         if highestTier == .free {
-            var historical: PurchaseTier = .free
-            for await result in Transaction.all {
-                guard let transaction = try? checkVerified(result), transaction.revocationDate == nil else { continue }
-                if StoreManager.professionalProductIDs.contains(transaction.productID) { historical = .professional; break }
-                if StoreManager.personalProductIDs.contains(transaction.productID) { historical = max(historical, .personal) }
-            }
             if historical > .free {
                 lastPaidTier = max(lastPaidTier ?? .free, historical)
                 if persistsEntitlementHistory {
@@ -863,7 +884,7 @@ class StoreManager: ObservableObject {
             for await result in Transaction.updates {
                 guard let self, let transaction = try? self.checkVerified(result) else { continue }
                 await transaction.finish()
-                await self.checkEntitlements()
+                await self.checkEntitlements(delivered: transaction)
             }
         }
     }
