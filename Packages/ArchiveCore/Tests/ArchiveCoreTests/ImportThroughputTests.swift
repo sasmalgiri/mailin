@@ -24,6 +24,8 @@
 //
 //  MAILIN_IMPORT_SCHEDULE = sequential | pipelined | both (default) | streaming | all, or an ordered
 //  comma list such as "pipelined,sequential" to alternate the run order.
+//  MAILIN_DEDUP = messageID (default) | messageIDOrCanonicalFingerprint | preserveAll picks the
+//  import sheet's Duplicates choice.
 //  MAILIN_SCALE_PRELOAD=/path/other.mbox imports that file first (untimed) so the
 //  fixture is timed into an existing, already large archive.
 //  Without MAILIN_SCALE_FILE the real Enron mbox of the gate-2 corpus is used
@@ -77,6 +79,13 @@ final class ImportThroughputTests: XCTestCase {
         }
     }
 
+    /// MAILIN_DEDUP = messageID (default, "Skip messages already in the archive") |
+    /// messageIDOrCanonicalFingerprint ("Skip duplicates, including re-encoded copies") |
+    /// preserveAll ("Keep every copy") — the three Duplicates choices of the import sheet.
+    private static var dedupPolicy: DedupPolicy {
+        DedupPolicy(rawValue: ProcessInfo.processInfo.environment["MAILIN_DEDUP"] ?? "") ?? .messageID
+    }
+
     override func setUpWithError() throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["MAILIN_SCALE"] == "1", "opt-in: MAILIN_SCALE=1")
         try XCTSkipUnless(Self.fixture != nil, "no fixture: set MAILIN_SCALE_FILE or build the gate-2 Enron corpus")
@@ -115,6 +124,7 @@ final class ImportThroughputTests: XCTestCase {
             options.useOffsetEngine = schedule != .streaming
             options.recordLocators = schedule != .streaming
             options.overlapBatches = schedule == .pipelined
+            options.dedupPolicy = Self.dedupPolicy
 
             // MAILIN_SCALE_PRELOAD: an archive that is already large — the
             // preload is imported first, untimed, then the fixture is timed
@@ -157,12 +167,14 @@ final class ImportThroughputTests: XCTestCase {
             let indexed = try await fts.rowCount() - preloaded
             let peak = await sampler.peak, base = await sampler.baseline
             let mib = Double(bytes) / 1_048_576
-            print(String(format: "THROUGHPUT configuration=%@ schedule=\"%@\" file=%@ bytes=%lld messages=%d indexed=%d seconds=%.1f msgs_per_s=%.1f MiB_per_s=%.2f first_commit_s=%@ batches=%d peak_footprint_MB=%.0f baseline_footprint_MB=%.0f damaged=%d persist_failed=%d",
+            print(String(format: "THROUGHPUT configuration=%@ schedule=\"%@\" file=%@ bytes=%lld messages=%d indexed=%d seconds=%.1f msgs_per_s=%.1f MiB_per_s=%.2f first_commit_s=%@ batches=%d peak_footprint_MB=%.0f baseline_footprint_MB=%.0f damaged=%d persist_failed=%d dedup=%@ duplicates=%d",
                          configuration, schedule.label, fixture.lastPathComponent, bytes, stored, indexed, seconds,
                          seconds > 0 ? Double(stored) / seconds : 0, seconds > 0 ? mib / seconds : 0,
                          firstCommitSeconds.map { String(format: "%.2f", $0) } ?? "n/a", firstCommit.batches,
-                         Double(peak) / 1_048_576, Double(base) / 1_048_576, summary.damaged, summary.persistFailed))
-            XCTAssertEqual(summary.parsed, stored, "\(schedule.label): parsed = stored")
+                         Double(peak) / 1_048_576, Double(base) / 1_048_576, summary.damaged, summary.persistFailed,
+                         Self.dedupPolicy.rawValue, summary.duplicates ?? 0))
+            XCTAssertEqual(summary.parsed - (summary.duplicates ?? 0) - summary.blockedByTombstone, stored,
+                           "\(schedule.label): parsed − duplicates skipped = stored")
             XCTAssertEqual(indexed, stored, "\(schedule.label): FTS rows = stored")
             XCTAssertEqual(summary.persistFailed, 0, schedule.label)
         }

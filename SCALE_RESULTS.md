@@ -596,3 +596,22 @@ after-run alike). The per-message cost roughly doubles between a 22k-message and
 heads, so the remaining large-archive cost grows with the archive, inside the store / search-index writes, and is
 the target if more speed is wanted. The 1 GB rows, the attachment-heavy and OST rows and the existing-archive row
 were not run (owner: small files only).
+
+### The three Duplicates choices, 50 MB (Release, 09:45–10:02 IST)
+
+Owner request 2026-11-20: a speed for each Duplicates choice of the import sheet. `ImportThroughputTests` with
+`MAILIN_DEDUP`, same 50 MB file, empty archive, before (e918bb0, sequential) and after (bd81625, overlap on),
+three rounds. The default-choice row is the run above.
+
+| Duplicates choice | Before, runs | Before median | After, runs | After median |
+|---|---|---|---|---|
+| Skip messages already in the archive (default) | 67.1 / 67.3 / 66.4 s | 67.1 s | 66.9 / 67.3 / 64.7 s | 66.9 s |
+| Skip duplicates, including re-encoded copies | 67.9 / 69.1 / 84.8 s | 69.1 s | 67.2 / 75.2 / 82.3 s | 75.2 s |
+| Keep every copy | 68.7 / 94.4 / 73.9 s | 73.9 s | 75.5 / 94.0 / 66.9 s | 75.5 s |
+
+Every run stored and indexed 21,752 of 21,752, 0 damaged, 0 persist failures; this slice has no duplicates, so
+no choice skipped anything. Round three ran slower on both heads alike (84–94 s), so the spread is machine
+noise, not the choice or the build. **Reading:** the three choices import at the same speed within noise,
+about 65–75 s per 50 MB (≈ 0.7 MiB/s, ≈ 300 messages/s) into an empty archive on this Mac, before and after
+PERF-01…04 alike. Bigger archives are slower per message (0.35 MiB/s at 213 MB), so no single rate holds for
+every size.
