@@ -71,6 +71,19 @@ final class BulkImportCoordinator {
 
     private var batchController: AdaptiveBatchController?
     private var lastBatchOutcome: BatchOutcome?
+
+    /// FAST-01: the search-index writer of a fast import (nil otherwise) and
+    /// what it has done this run.
+    private struct SearchWrite: Sendable {
+        let emails: [MBOXParser.RawEmail]
+        let sourceID: Int64
+        let committed: Int
+    }
+    private var searchWriter: PipelinedBatchSink<SearchWrite>?
+    private var searchWriterIndexed = 0
+    private var searchWriterFailedBatches = 0
+    /// FAST-03: what the duplicate pass after the last fast import did.
+    private(set) var lastDeferredDeduplication: SQLiteEmailStore.DeferredDeduplicationResult?
     /// Set while the controller has paused the import. Observable so the queue
     /// UI can show the reason instead of looking stalled.
     private(set) var batchPauseReason: String?
@@ -161,6 +174,20 @@ final class BulkImportCoordinator {
         /// small fixture can exercise the header-only (deferred) path. Nil
         /// means the engine's default (100 MiB).
         var fullParseCeilingBytes: Int64? = nil
+        /// FAST (owner decision 2026-11-20), off by default — the import of
+        /// before is the default and the rollback. On:
+        ///   • every message is stored first, with no duplicate check at
+        ///     insert (`.preserveAll`); the sources are recorded as owing the
+        ///     duplicate pass for `dedupPolicy` before the first write;
+        ///   • the offset parser asks `ImportWorkerPolicy.readers()` for its
+        ///     worker count before every batch (FAST-02);
+        ///   • the search index is written by a second writer while the next
+        ///     batch goes into the archive, several year files at once
+        ///     (FAST-01);
+        ///   • when the files are done, `runDeferredDeduplication` applies
+        ///     `dedupPolicy` — duplicates merged into the kept copy and moved
+        ///     to the Trash, fingerprints on several workers (FAST-03).
+        var fastImport: Bool = false
     }
 
     /// UI/side-effect hooks. All are invoked on the main actor.
@@ -419,6 +446,12 @@ final class BulkImportCoordinator {
         callbacks: Callbacks = Callbacks()
     ) async throws -> RunSummary {
         func restoreBudgets() async {
+            if let writer = searchWriter {
+                // The search write in flight finishes (or fails) before the run returns.
+                try? await writer.drain()
+                searchWriter = nil
+                await fts.setParallelShardWriters(0)   // back to the import of before
+            }
             if options.adaptiveBatching {
                 await store.setMemoryBudget(SQLiteEmailStore.interactiveBudget)
                 await fts.endImportMode()
@@ -496,6 +529,33 @@ final class BulkImportCoordinator {
         cancelRequested = false
         var summary = RunSummary()
         let startedAt = Date()
+        // FAST-01: the second writer — the search index is written while the
+        // next batch goes into the archive, several year files at once.
+        searchWriterIndexed = 0
+        searchWriterFailedBatches = 0
+        lastDeferredDeduplication = nil
+        if options.fastImport {
+            await fts.setParallelShardWriters(ImportWorkerPolicy.searchWriters())
+            searchWriter = PipelinedBatchSink<SearchWrite> { [weak self] write in
+                guard let self else { return }
+                do {
+                    try await self.retryingAfterVolumeLoss { try await self.fts.indexBatch(write.emails) }
+                    self.searchWriterIndexed += write.emails.count
+                    self.live.indexedThisRun = self.searchWriterIndexed
+                    try? await self.store.recordSourceCoverage(sourceID: write.sourceID, committed: write.committed,
+                                                               indexed: write.emails.count)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Same degraded mode as the inline write: the rows are in the
+                    // store and the launch reconciler indexes them.
+                    self.searchWriterFailedBatches += 1
+                    Self.logger.warning("FTS index failed for a batch (fast import); store↔FTS drift will be repaired on next launch: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        } else {
+            searchWriter = nil
+        }
         // A5(d): the receipt records failures by file NAME (it must stay
         // readable without this app); "Retry failed sources" resolves those
         // names back to the URLs of this run while the app is still open.
@@ -670,6 +730,12 @@ final class BulkImportCoordinator {
                         sourceKind: url.pathExtension.lowercased()
                     ))
 
+                // FAST-03: recorded before the first write, so an interrupted
+                // run still owes (and later runs) the duplicate pass.
+                if options.fastImport {
+                    try await store.markDeferredDeduplication(sourceID: sourceID, policy: options.dedupPolicy)
+                }
+
                 // 2. Skip if we have already fully ingested this file.
                 if await checkpoints.isImported(sha256: hash) {
                     summary.skippedFiles += 1
@@ -812,7 +878,7 @@ final class BulkImportCoordinator {
                                 accountID: options.accountID,
                                 sourceID: sourceID,
                                 firstOrdinal: batchStart + range.lowerBound,
-                                dedupPolicy: options.dedupPolicy,
+                                dedupPolicy: options.fastImport ? .preserveAll : options.dedupPolicy,
                                 batchSize: batchSize,
                                 progress: nil,
                                 progressCheckpoint: atomicCheckpoint,
@@ -858,6 +924,13 @@ final class BulkImportCoordinator {
                         // become a ghost FTS hit.
                         let insertedSet = Set(insertResult.insertedIDs)
                         let toIndex = pending.filter { insertedSet.contains($0.id) }
+                        if let searchWriter = self.searchWriter {
+                            // FAST-01: the search write runs while the next batch is stored.
+                            if !toIndex.isEmpty {
+                                try await searchWriter.send(SearchWrite(emails: toIndex, sourceID: sourceID,
+                                                                        committed: insertedSet.count))
+                            }
+                        } else {
                         do {
                             if !toIndex.isEmpty {
                                 // B5: an unplug between the insert and the
@@ -878,6 +951,7 @@ final class BulkImportCoordinator {
                             summary.ftsDegraded = true
                             summary.ftsFailedBatchCount += 1
                             Self.logger.warning("FTS index failed for a batch in \(sourceName, privacy: .public); store↔FTS drift will be repaired on next launch: \(error.localizedDescription, privacy: .public)")
+                        }
                         }
 
                         // (B3) A batch is NOT committed until its checkpoint
@@ -992,6 +1066,8 @@ final class BulkImportCoordinator {
                     } else if offsetEligible {
                         var engine = OffsetImportEngine()
                         if let ceiling = options.fullParseCeilingBytes { engine.fullParseCeilingBytes = ceiling }
+                        // FAST-02: the worker count follows the Mac, batch by batch.
+                        if options.fastImport { engine.parseWorkerCount = { ImportWorkerPolicy.readers() } }
                         // §3-P1: the engine parses off the main actor and hands
                         // each batch to main-actor sinks (Sendable), so the
                         // coordinator's state is only touched on the main actor.
@@ -1215,6 +1291,23 @@ final class BulkImportCoordinator {
             }
         }
 
+        // FAST-01/03: the last search write, then the duplicate pass.
+        var deferredTrashed = 0
+        if let writer = searchWriter {
+            try await writer.drain()
+            summary.indexed += searchWriterIndexed
+            if searchWriterFailedBatches > 0 {
+                summary.ftsDegraded = true
+                summary.ftsFailedBatchCount += searchWriterFailedBatches
+            }
+            await MainActor.run { self.status = .indexing(processed: summary.persistAttempted, total: summary.persistAttempted) }
+            let pass = try await store.runDeferredDeduplication(workers: ImportWorkerPolicy.duplicatePassWorkers())
+            lastDeferredDeduplication = pass
+            deferredTrashed = pass.duplicatesTrashed + pass.previouslyDeletedTrashed
+            summary.blockedByTombstone += pass.previouslyDeletedTrashed
+            Self.logger.notice("Fast import duplicate pass: \(pass.examined) examined, \(pass.duplicatesTrashed) duplicates and \(pass.previouslyDeletedTrashed) previously deleted moved to the Trash, \(pass.heldKept) kept under hold")
+        }
+
         // Per-run inserted/duplicates from store deltas (B4). Unreadable
         // counts stay nil — reported as unavailable, never inflated.
         let completedAt = Date()
@@ -1233,7 +1326,9 @@ final class BulkImportCoordinator {
             summary.warnings.append("Search-index row count unavailable after import.")
         }
         if let before = storeBefore, let after = storeAfter {
-            summary.inserted = max(0, after - before)
+            // FAST-03: copies the duplicate pass moved to the Trash are counted
+            // as duplicates / previously deleted, not as inserted.
+            summary.inserted = max(0, after - before - deferredTrashed)
         }
         if let before = dupBefore, let after = dupAfter {
             summary.duplicates = max(0, after - before)

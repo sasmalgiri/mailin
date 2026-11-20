@@ -306,6 +306,7 @@ actor FTSSearchIndex {
         idleSweep = nil
         for (_, handle) in shards { sqlite3_close(handle) }
         shards.removeAll()
+        shardHasUnregisteredRows.removeAll()
         shardLastAccess.removeAll()
         shardLastTouch.removeAll()
         didMigrateLegacy = false
@@ -376,6 +377,7 @@ actor FTSSearchIndex {
     private func close(year: Int) {
         if let handle = shards[year] { sqlite3_close(handle) }
         shards.removeValue(forKey: year)
+        shardHasUnregisteredRows.removeValue(forKey: year)
         shardLastAccess.removeValue(forKey: year)
         shardLastTouch.removeValue(forKey: year)
     }
@@ -438,20 +440,58 @@ actor FTSSearchIndex {
             let y = Self.year(for: email)
             byYear[y, default: []].append(email)
         }
+        // The import of before (default, the verified path).
+        guard fastShardWrites else {
+            for (year, group) in byYear {
+                let db = try ensureShard(year: year)
+                try exec(db, SQLiteHygiene.beginWrite)
+                do {
+                    for email in group {
+                        try insertWithHandle(email, db: db)
+                    }
+                    try exec(db, "COMMIT;")
+                } catch {
+                    try? exec(db, "ROLLBACK;")
+                    throw error
+                }
+            }
+            return
+        }
+        // FAST-01 (fast import only): the shard writer skips the whole-shard
+        // delete scan for a message the register says is new, prepares its
+        // statements once per shard, and writes up to `parallelShardWriters`
+        // year shards at once. Each shard still commits its group in one
+        // transaction.
+        var groups: [(handle: FTSShardWriter.Handle, emails: [MBOXParser.RawEmail], unregistered: Bool)] = []
+        groups.reserveCapacity(byYear.count)
         for (year, group) in byYear {
             let db = try ensureShard(year: year)
-            try exec(db, SQLiteHygiene.beginWrite)
-            do {
-                for email in group {
-                    try insertWithHandle(email, db: db)
-                }
-                try exec(db, "COMMIT;")
-            } catch {
-                try? exec(db, "ROLLBACK;")
-                throw error
+            let unregistered: Bool
+            if let known = shardHasUnregisteredRows[year] {
+                unregistered = known
+            } else {
+                unregistered = FTSShardWriter.hasUnregisteredRows(db)
+                shardHasUnregisteredRows[year] = unregistered
             }
+            groups.append((FTSShardWriter.Handle(db: db), group, unregistered))
         }
+        try FTSShardWriter.writeGroups(groups, writers: parallelShardWriters)
     }
+
+    /// FAST-01: how many year shards `indexBatch` may write at the same time.
+    /// 1 (the default) writes them one after another, as before.
+    private var parallelShardWriters = 1
+    /// FAST-01: on for the duration of a fast import (`setParallelShardWriters`
+    /// with a count; reset with 0).
+    private var fastShardWrites = false
+    func setParallelShardWriters(_ count: Int) {
+        fastShardWrites = count > 0
+        parallelShardWriters = max(1, count)
+    }
+
+    /// FAST-01: per open shard, whether it holds FTS rows its register does not
+    /// list (a legacy shard). Cleared when the handle closes.
+    private var shardHasUnregisteredRows: [Int: Bool] = [:]
 
     /// Test-only: counts calls to `search` so a wiring test can assert the live
     /// search path actually reached FTS5 (vs. the in-RAM fallback). Reset

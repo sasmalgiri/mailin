@@ -3528,13 +3528,19 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// documented; collisions require all five normalized inputs to match,
     /// which is the product definition of "the same message without an ID".
     static func canonicalFingerprint(for email: MBOXParser.RawEmail) -> String {
+        canonicalFingerprint(headers: email.headers, plainBody: email.plainBody)
+    }
+
+    /// The same fingerprint from stored parts (FAST-03, the duplicate pass
+    /// after a fast import reads headers and plain body back from the store).
+    static func canonicalFingerprint(headers: [String: String], plainBody: String) -> String {
         func norm(_ s: String?) -> String {
             (s ?? "").lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        let bodyHash = sha256Hex(Data(email.plainBody.utf8))
+        let bodyHash = sha256Hex(Data(plainBody.utf8))
         let material = [
-            norm(email.headers["From"]), norm(email.headers["To"]),
-            norm(email.headers["Date"]), norm(email.headers["Subject"]),
+            norm(headers["From"]), norm(headers["To"]),
+            norm(headers["Date"]), norm(headers["Subject"]),
             bodyHash
         ].joined(separator: "|")
         return sha256Hex(Data(material.utf8))

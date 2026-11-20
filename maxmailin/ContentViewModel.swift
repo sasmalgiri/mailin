@@ -208,9 +208,16 @@ class ContentViewModel: ObservableObject {
             // Locators are the only content a message above the full-parse
             // ceiling has, so they are recorded whenever the offset engine
             // runs. The `locatorReads` switch gates READS only (audit F02).
-            recordLocators: useOffsetEngine
+            recordLocators: useOffsetEngine,
+            // FAST (owner decision 2026-11-20): store first with dynamic readers
+            // and writers, then the duplicate pass. Off unless switched on with
+            //   defaults write com.ecosanskriti.mailin mailinFastImport -bool YES
+            // — no on-screen control yet; the import of before stays the default.
+            fastImport: UserDefaults.standard.bool(forKey: fastImportDefaultsKey)
         )
     }
+
+    nonisolated static let fastImportDefaultsKey = "mailinFastImport"
 
     /// `inputByteLimit`: the tier's cumulative input allowance (nil =
     /// unlimited). Checked here, at the service boundary, as well as by the

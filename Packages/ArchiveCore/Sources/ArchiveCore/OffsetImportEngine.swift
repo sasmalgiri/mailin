@@ -55,6 +55,12 @@ struct OffsetImportEngine: Sendable {
     /// that are currently DROPPED are the ones that behave differently.
     var fullParseCeilingBytes: Int64 = 100 * 1_048_576
 
+    /// FAST-02: asked before every batch for how many parse workers to use
+    /// (`ImportWorkerPolicy.readers()` in the fast import). Nil = the fixed
+    /// `parseWorkers` of before. Message order is unchanged either way:
+    /// results are put back in ordinal order before the batch is handed on.
+    var parseWorkerCount: (@Sendable () -> Int)? = nil
+
     var scanner = OffsetMBOXScanner()
 
     /// The marker put on a message whose body was not decoded at import, so
@@ -119,11 +125,12 @@ struct OffsetImportEngine: Sendable {
         var failed = 0
         var categories: [String: Int] = [:]
         let reader = LocatorReader()   // same file, same run — no provenance claim needed
-        let workers = Self.parseWorkers
+        let workerCount = parseWorkerCount
 
         func flushPending() async throws {
             guard !pending.isEmpty else { return }
             try Task.checkCancellation()
+            let workers = max(1, workerCount?() ?? Self.parseWorkers)
             let work = pending
             pending.removeAll(keepingCapacity: true)
             pendingBytes = 0
