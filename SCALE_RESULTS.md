@@ -564,3 +564,35 @@ modest for mbox / eml / pst (5–9 %) and large for the zip container (34 %, whe
 the write). The dominating cost remains the store and the two search indexes per message. Single runs each; the
 instruction's "repeat at least three times, alternate order" is still owed and is done cheaply with
 `ImportThroughputTests` (`MAILIN_IMPORT_SCHEDULE=both`, same binary, mbox only) rather than the 65-minute matrix.
+
+## 2026-11-20 — PERF-05: repeated A/B on a 50 MB file (Release, quiet Mac, 09:26–09:37 IST)
+
+Owner decision 2026-11-20: benchmark on small files (50 MB), not the 1 GB corpus. The first 50 MB of the real
+Enron mbox, cut at a message boundary (`real-corpus-enron/enron-50mb.mbox`, 52,437,764 bytes, 21,752 messages),
+imported into an empty archive through the production coordinator by `ImportThroughputTests` in both detached
+worktrees, three rounds, order alternated (before, after pipelined→sequential, before, after sequential→pipelined,
+before, after pipelined→sequential). Spotlight idle, nothing else running.
+
+| Run | Before e918bb0 (sequential, the only schedule it has) | After bd81625, overlap ON (default) | After bd81625, overlap OFF (rollback) |
+|---|---|---|---|
+| 1 | 67.1 s | 66.9 s | 69.0 s |
+| 2 | 67.3 s | 67.3 s | 68.8 s |
+| 3 | 66.4 s | 64.7 s | 68.0 s |
+| median | **67.1 s** (324 msgs/s, 0.75 MiB/s) | **66.9 s** (325 msgs/s) | **68.8 s** (316 msgs/s) |
+
+Every run: parsed = stored = FTS rows = 21,752, damaged 0, persist failed 0. First committed batch at 0.11–0.21 s
+on every head. Peak footprint 77–78 MB before, 159–184 MB after (two batches resident, inside the budget).
+
+**Reading:** on a 50 MB file into an empty archive the after build is **not faster** — within ±3 % of the
+baseline, and the spread between rounds is of the same size. The overlap schedule is ~3 % faster than its own
+rollback switch, i.e. it pays for the extra bookkeeping and no more: the import is bound by the store and the two
+search indexes, not by parsing, so parsing one batch ahead has little to overlap. No speed-up is claimed from
+PERF-01…04 on this size. What was measured earlier at 213 MB (−5 / −9 / −34 / −7 %, single runs) stays unrepeated
+and unclaimed. The repeated A/B pair at 213 MB taken while Spotlight was indexing a fresh 378k-file fixture
+(both schedules ≈ 718 s) is discarded as contaminated (`~/mailin-perf/perf05/ab-213-contaminated-spotlight.log`).
+
+**What the sizes say together:** 50 MB imports at 0.75 MiB/s, 213 MB at 0.34–0.36 MiB/s (quiet baseline and
+after-run alike). The per-message cost roughly doubles between a 22k-message and a 57k-message archive on both
+heads, so the remaining large-archive cost grows with the archive, inside the store / search-index writes, and is
+the target if more speed is wanted. The 1 GB rows, the attachment-heavy and OST rows and the existing-archive row
+were not run (owner: small files only).
