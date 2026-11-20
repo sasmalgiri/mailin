@@ -1947,10 +1947,8 @@ struct EmailDetailView: View {
         printInfo.isHorizontallyCentered = false
         printInfo.isVerticallyCentered = false
 
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0,
-            width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
-            height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
-        textView.textStorage?.setAttributedString(attrString)
+        // PRINT-01: the whole email laid out, the view as tall as the text.
+        let textView = PrintableText.view(attrString, width: PrintableText.width(of: printInfo))
 
         let panel = ManagedSavePanel()
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
@@ -2087,10 +2085,8 @@ struct EmailDetailView: View {
         }
 
         let printInfo = NSPrintInfo.shared
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0,
-            width: printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin,
-            height: printInfo.paperSize.height - printInfo.topMargin - printInfo.bottomMargin))
-
+        // PRINT-01: the whole email laid out, the view as tall as the text.
+        let textView: NSTextView
         if let data = SafeHTMLRenderer.sanitizedIfEnabled(htmlContent).data(using: .utf8),
            let attrString = try? NSAttributedString(
                data: data,
@@ -2098,10 +2094,11 @@ struct EmailDetailView: View {
                          .characterEncoding: String.Encoding.utf8.rawValue],
                documentAttributes: nil
            ) {
-            textView.textStorage?.setAttributedString(attrString)
+            textView = PrintableText.view(attrString, width: PrintableText.width(of: printInfo))
         } else {
-            textView.string = "\(headerText)\n\n\(emailBody)"
-            textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+            textView = PrintableText.view("\(headerText)\n\n\(emailBody)",
+                                          font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                                          width: PrintableText.width(of: printInfo))
         }
 
         let printOp = NSPrintOperation(view: textView, printInfo: printInfo)

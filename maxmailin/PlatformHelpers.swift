@@ -352,15 +352,53 @@ func csvRow(_ fields: [String]) -> String {
 
 // MARK: - Print Helper
 
+#if os(macOS)
+/// PRINT-01 (owner report 2026-11-20: a one-email print showed 9 pages, the
+/// text only on the first two). A text view handed to NSPrintOperation was
+/// laid out lazily — only as far as a screen would need — so later pages
+/// printed blank. This builds the view with the WHOLE text laid out and the
+/// view exactly as tall as the text, so every page carries its part and the
+/// page count matches the text.
+enum PrintableText {
+    @MainActor
+    static func view(_ attributed: NSAttributedString, width: CGFloat) -> NSTextView {
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: max(1, width), height: 1))
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: max(1, width), height: .greatestFiniteMagnitude)
+        textView.layoutManager?.allowsNonContiguousLayout = false
+        textView.textStorage?.setAttributedString(attributed)
+        if let container = textView.textContainer, let layout = textView.layoutManager {
+            layout.ensureLayout(for: container)
+            let used = layout.usedRect(for: container)
+            textView.setFrameSize(NSSize(width: max(1, width),
+                                         height: max(1, ceil(used.height + textView.textContainerInset.height * 2))))
+        }
+        return textView
+    }
+
+    @MainActor
+    static func view(_ text: String, font: NSFont, width: CGFloat) -> NSTextView {
+        view(NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: NSColor.textColor]), width: width)
+    }
+
+    /// The printable width of a print info.
+    static func width(of info: NSPrintInfo) -> CGFloat {
+        info.paperSize.width - info.leftMargin - info.rightMargin
+    }
+}
+#endif
+
 enum PlatformPrinter {
     #if os(macOS)
     @MainActor
     static func printText(_ text: String) {
         guard OrgPolicy.confirmAllowed(.print) else { return }
-        let printView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
-        printView.string = text
-        printView.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-        let printOp = NSPrintOperation(view: printView)
+        let info = NSPrintInfo.shared
+        let printView = PrintableText.view(text, font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
+                                           width: PrintableText.width(of: info))
+        let printOp = NSPrintOperation(view: printView, printInfo: info)
         printOp.printInfo.horizontalPagination = .fit
         printOp.printInfo.verticalPagination = .automatic
         printOp.runModal(for: NSWindow(), delegate: nil, didRun: nil, contextInfo: nil)

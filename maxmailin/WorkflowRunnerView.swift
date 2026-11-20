@@ -1561,12 +1561,11 @@ struct WorkflowRunnerView: View {
 
     private func printText(_ text: String, monospace: Bool) {
         guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
-        textView.string = text
-        textView.font = monospace
+        let info = NSPrintInfo.shared
+        let textView = PrintableText.view(text, font: monospace
             ? NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
-            : NSFont.systemFont(ofSize: 11)
-        let op = NSPrintOperation(view: textView)
+            : NSFont.systemFont(ofSize: 11), width: PrintableText.width(of: info))
+        let op = NSPrintOperation(view: textView, printInfo: info)
         op.jobTitle = wfNumber
         op.run()
     }

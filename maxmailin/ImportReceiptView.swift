@@ -415,12 +415,12 @@ struct ImportReceiptView: View {
     #if os(macOS)
     private func printReceipt() {
         guard OrgPolicy.confirmAllowed(.print) else { return }   // enterprise policy (OrgPolicy)
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 468, height: 648))
-        textView.string = plainText()
-        textView.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
-        let operation = NSPrintOperation(view: textView)
-        operation.printInfo.topMargin = 36
-        operation.printInfo.bottomMargin = 36
+        let info = NSPrintInfo.shared.copy() as? NSPrintInfo ?? NSPrintInfo.shared
+        info.topMargin = 36
+        info.bottomMargin = 36
+        let textView = PrintableText.view(plainText(), font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+                                          width: PrintableText.width(of: info))
+        let operation = NSPrintOperation(view: textView, printInfo: info)
         operation.run()
     }
     #endif

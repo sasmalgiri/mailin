@@ -13902,3 +13902,39 @@ final class Review1116CTests: XCTestCase {
         XCTAssertFalse(dismissed)
     }
 }
+
+#if os(macOS)
+import PDFKit
+
+/// PRINT-01 (owner report 2026-11-20: one email printed as 9 pages with the
+/// text only on the first two). The print view is fully laid out and as tall
+/// as its text, so every page of the printout carries text.
+@MainActor
+final class PrintableTextTests: XCTestCase {
+    func testLongText_printsOnEveryPage_andThePageCountFollowsTheText() throws {
+        let lines = (0..<400).map { "Line \($0): the quick brown fox jumps over the lazy dog, again and again." }
+        let text = lines.joined(separator: "\n")
+        let info = NSPrintInfo.shared.copy() as! NSPrintInfo
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("print01-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        info.jobDisposition = .save
+        info.dictionary()[NSPrintInfo.AttributeKey.jobSavingURL] = url
+        let view = PrintableText.view(text, font: .monospacedSystemFont(ofSize: 10, weight: .regular),
+                                      width: PrintableText.width(of: info))
+        let pageHeight = info.paperSize.height - info.topMargin - info.bottomMargin
+        XCTAssertGreaterThan(view.frame.height, pageHeight * 3, "the view is as tall as the whole text")
+        let op = NSPrintOperation(view: view, printInfo: info)
+        op.showsPrintPanel = false
+        op.showsProgressPanel = false
+        XCTAssertTrue(op.run())
+        let doc = try XCTUnwrap(PDFDocument(url: url))
+        XCTAssertGreaterThan(doc.pageCount, 3)
+        for index in 0..<doc.pageCount {
+            let chars = doc.page(at: index)?.string?.count ?? 0
+            XCTAssertGreaterThan(chars, 0, "page \(index + 1) of \(doc.pageCount) carries text")
+        }
+        let printed = (0..<doc.pageCount).compactMap { doc.page(at: $0)?.string }.joined()
+        XCTAssertTrue(printed.contains("Line 399:"), "the last line is printed")
+    }
+}
+#endif
