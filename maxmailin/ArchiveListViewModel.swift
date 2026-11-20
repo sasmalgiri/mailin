@@ -120,6 +120,10 @@ final class ArchiveListViewModel: ObservableObject {
 
     var maxRetained: Int { windowPages * pageSize }
 
+    /// LIST-02: how many rows of the whole list come before the window's first
+    /// row (pages before the head are full pages).
+    var windowOffset: Int { (residentPages.first?.index ?? 0) * pageSize }
+
     /// Ordered ids of the loaded page window — the detail view's navigation
     /// order (Part R: detail navigation sources list PAGE state, never a
     /// whole-corpus array).

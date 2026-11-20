@@ -1044,6 +1044,24 @@ final class V2VerificationTests: XCTestCase {
     /// Bounded bidirectional page window: forward scroll drops the head page,
     /// backward scroll re-fetches it EXACTLY via its remembered start cursor,
     /// and the resident window never exceeds `windowPages * pageSize`.
+    /// LIST-02 (owner report 2026-11-20: the email detail said "1/100" over
+    /// 56,696 emails): the window knows how many rows of the whole list come
+    /// before it, so a position is "row of total", and it moves with paging.
+    func testArchiveListVM_windowOffset_isTheRowsBeforeTheWindow_andFollowsPaging() async throws {
+        let fixtures = (0..<70).map { makeEmailDated(mid: "<o-\($0)@t>", subject: "Off \($0)", body: "b \($0)", dayOffset: $0) }
+        let oracle = oracleOrder(fixtures)
+        let vm = try await makeListVM(fixtures, pageSize: 10, maxRetained: 30)   // 3 pages resident
+        await vm.loadInitial()
+        XCTAssertEqual(vm.windowOffset, 0)
+        for _ in 0..<4 { await vm.loadNextPage() }                                 // pages 0…4 seen, 2…4 resident
+        XCTAssertEqual(vm.windowOffset, 20, "two pages dropped from the front")
+        XCTAssertEqual(vm.summaries.first?.id, oracle[20], "the first resident row is row 21 of the whole list")
+        XCTAssertEqual(vm.totalCount, 70)
+        await vm.loadPreviousPage()
+        XCTAssertEqual(vm.windowOffset, 10, "paging back moves the offset back")
+        XCTAssertEqual(vm.summaries.first?.id, oracle[10])
+    }
+
     func testArchiveListVM_bidirectionalPageWindow() async throws {
         let fixtures = (0..<300).map { makeEmailDated(mid: "<bd-\($0)@t>", subject: "S\($0)", body: "b \($0)", dayOffset: $0) }
         let oracle = oracleOrder(fixtures)

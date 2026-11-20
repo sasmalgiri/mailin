@@ -37,6 +37,15 @@ struct EmailDetailView: View {
     var onNavigate: ((UUID) -> Void)? = nil
     var onClose: (() -> Void)? = nil
     var searchText: String = ""
+    /// LIST-02 (owner report 2026-11-20: "1/100" over 56,696 emails): where
+    /// `orderedIDs` (the loaded window) sits in the whole list, the list's
+    /// total, and a way to load the page after / before the window so next /
+    /// previous carry on past it. Defaults: the window is the whole list.
+    var positionOffset: Int = 0
+    var listTotal: Int? = nil
+    var canPageForward = false
+    var canPageBackward = false
+    var loadAdjacentPage: ((_ forward: Bool) async -> [UUID])? = nil
 
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var storeManager: StoreManager
@@ -88,11 +97,40 @@ struct EmailDetailView: View {
     }
     private var hasPrev: Bool {
         guard let idx = currentIndex else { return false }
-        return idx > 0
+        return idx > 0 || (canPageBackward && loadAdjacentPage != nil)
     }
     private var hasNext: Bool {
         guard let idx = currentIndex else { return false }
-        return idx < orderedIDs.count - 1
+        return idx < orderedIDs.count - 1 || (canPageForward && loadAdjacentPage != nil)
+    }
+
+    /// "1 of 56,696": the position in the whole list.
+    private func positionText(_ idx: Int) -> String {
+        let position = (positionOffset + idx + 1).formatted()
+        let total = max(listTotal ?? 0, positionOffset + orderedIDs.count).formatted()
+        return String(localized: "\(position) of \(total)")
+    }
+
+    /// Next / previous, loading the adjacent page at the window's edge.
+    private func step(forward: Bool) {
+        guard let idx = currentIndex else { return }
+        let target = forward ? idx + 1 : idx - 1
+        if orderedIDs.indices.contains(target) {
+            onNavigate?(orderedIDs[target])
+            return
+        }
+        guard let loadAdjacentPage else { return }
+        let currentID = shown.id
+        Task { @MainActor in
+            let ids = await loadAdjacentPage(forward)
+            guard let i = ids.firstIndex(of: currentID) else {
+                // The current email left the window: the first new row in that direction.
+                if let first = forward ? ids.first : ids.last { onNavigate?(first) }
+                return
+            }
+            let j = forward ? i + 1 : i - 1
+            if ids.indices.contains(j) { onNavigate?(ids[j]) }
+        }
     }
 
     private func advanceToNextUnreviewed() {
@@ -312,9 +350,7 @@ struct EmailDetailView: View {
                 if onNavigate != nil {
                     HStack(spacing: 4) {
                         Button {
-                            if let idx = currentIndex, idx > 0 {
-                                onNavigate?(orderedIDs[idx - 1])
-                            }
+                            step(forward: false)
                         } label: {
                             Image(systemName: "chevron.left")
                                 .font(.system(size: 11, weight: .semibold))
@@ -328,15 +364,13 @@ struct EmailDetailView: View {
                         .keyboardShortcut(.upArrow, modifiers: [.command])
 
                         if let idx = currentIndex {
-                            Text("\(idx + 1)/\(orderedIDs.count)")
+                            Text(positionText(idx))
                                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                                 .foregroundColor(AppColors.secondary)
                         }
 
                         Button {
-                            if let idx = currentIndex, idx < orderedIDs.count - 1 {
-                                onNavigate?(orderedIDs[idx + 1])
-                            }
+                            step(forward: true)
                         } label: {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 11, weight: .semibold))

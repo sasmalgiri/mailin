@@ -368,6 +368,22 @@ class ParsedEmailListViewModel: ObservableObject {
     /// Ordered ids of the visible window — detail-view navigation order.
     var visibleOrderedIDs: [UUID] { visibleEmails.map(\.id) }
 
+    // MARK: LIST-02 (owner report 2026-11-20: the detail said "1/100" over 56,696 emails)
+
+    /// True when the visible rows are the paged list itself (no in-window
+    /// refinement), so positions map onto the whole list.
+    private var visibleIsWholeWindow: Bool { visibleEmails.count == residentEmails.count }
+    /// Rows of the whole list before the first visible row.
+    var listPositionOffset: Int { visibleIsWholeWindow ? pager.windowOffset : 0 }
+    /// Whether the detail's next / previous can go past the loaded window.
+    var canPageAfterWindow: Bool { visibleIsWholeWindow && hasMorePages }
+    var canPageBeforeWindow: Bool { visibleIsWholeWindow && hasEarlierPages }
+    /// Loads the page after (or before) the window and returns the new order.
+    func loadAdjacentPage(forward: Bool) async -> [UUID] {
+        if forward { await loadNextPageNow() } else { await loadEarlierPageNow() }
+        return visibleOrderedIDs
+    }
+
     @Published private(set) var isLoadingPage = false
 
     /// Store-truth count for the CURRENT query (pager total).

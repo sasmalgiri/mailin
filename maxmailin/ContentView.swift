@@ -1823,7 +1823,12 @@ struct ContentView: View {
                             orderedIDs: modelVM.visibleOrderedIDs,
                             onNavigate: { newID in iPadSelectedEmailID = newID },
                             onClose: { withAnimation { iPadSelectedEmailID = nil } },
-                            searchText: modelVM.searchText
+                            searchText: modelVM.searchText,
+                            positionOffset: modelVM.listPositionOffset,
+                            listTotal: modelVM.displayedEmailCount,
+                            canPageForward: modelVM.canPageAfterWindow,
+                            canPageBackward: modelVM.canPageBeforeWindow,
+                            loadAdjacentPage: { forward in await modelVM.loadAdjacentPage(forward: forward) }
                         )
                         .id(selectedID)
 
@@ -3543,7 +3548,12 @@ struct ContentView: View {
                     orderedIDs: modelVM.visibleOrderedIDs,
                     onNavigate: { newID in selectedEmailIDs = [newID] },
                     onClose: { withAnimation { selectedEmailIDs = [] } },
-                    searchText: modelVM.searchText
+                    searchText: modelVM.searchText,
+                    positionOffset: modelVM.listPositionOffset,
+                    listTotal: modelVM.displayedEmailCount,
+                    canPageForward: modelVM.canPageAfterWindow,
+                    canPageBackward: modelVM.canPageBeforeWindow,
+                    loadAdjacentPage: { forward in await modelVM.loadAdjacentPage(forward: forward) }
                 )
                 .id(selectedID)
                 .onAppear { modelVM.markRead(selectedID) }
@@ -5278,7 +5288,12 @@ private struct PhoneEmailDetailHost: View {
                     orderedIDs: modelVM.visibleOrderedIDs,
                     onNavigate: { newID in currentID = newID },
                     onClose: { dismiss() },
-                    searchText: modelVM.searchText
+                    searchText: modelVM.searchText,
+                    positionOffset: modelVM.listPositionOffset,
+                    listTotal: modelVM.displayedEmailCount,
+                    canPageForward: modelVM.canPageAfterWindow,
+                    canPageBackward: modelVM.canPageBeforeWindow,
+                    loadAdjacentPage: { forward in await modelVM.loadAdjacentPage(forward: forward) }
                 )
                 .id(email.id)
             } else {
