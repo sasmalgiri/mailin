@@ -102,9 +102,12 @@ struct ForensicReviewView: View {
         VStack(spacing: 0) {
             facetedFilterBar
 
-            if visibleEmails.count != archiveTotal {
+            // WIN-01 (deep dive 2026-11-20): the filters narrow the review's
+            // working set (the notice below says it is the newest N of the
+            // archive), so the count is "of the working set", not "of the archive".
+            if visibleEmails.count != workingSet.count {
                 Label {
-                    Text("Showing \(visibleEmails.count) of \(archiveTotal) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
+                    Text("Showing \(visibleEmails.count) of \(workingSet.count) emails matching current filters. Use tags, risk scores, and hot folders to narrow your forensic review scope.")
                         .font(Typography.caption1)
                 } icon: {
                     Image(systemName: "magnifyingglass")
@@ -280,7 +283,7 @@ struct ForensicReviewView: View {
 
                 Spacer()
 
-                Text("\(visibleEmails.count)/\(archiveTotal)")
+                Text("\(visibleEmails.count)/\(workingSet.count)")   // WIN-01
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.secondary)
 
@@ -1522,8 +1525,8 @@ struct ForensicReviewView: View {
 
                 Spacer()
 
-                if filtered != archiveTotal {
-                    Text("Showing \(filtered) of \(archiveTotal)")
+                if filtered != workingSet.count {   // WIN-01
+                    Text("Showing \(filtered) of \(workingSet.count)")
                         .font(.system(size: 9)).foregroundColor(.blue)
                         .help("Filters are active — not all emails are shown. Clear filters to see everything.")
                 }
@@ -1739,7 +1742,7 @@ struct ForensicReviewView: View {
     static func formatDate(_ raw: String?) -> String {
         guard let raw, let date = MBOXParser.parseDate(raw) else { return "—" }
         let f = DateFormatter()
-        f.dateFormat = "MM/dd/yy"
+        f.dateFormat = "MM/dd/yyyy"   // DATE-05
         return f.string(from: date)
     }
 

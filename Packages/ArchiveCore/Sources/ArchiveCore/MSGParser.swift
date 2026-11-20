@@ -131,10 +131,10 @@ struct MSGParser {
         let dateValue = properties.dateProperty(.messageDeliveryTime)
             ?? properties.dateProperty(.clientSubmitTime)
             ?? properties.dateProperty(.creationTime)
-            ?? Date.distantPast
 
         let isoFormatter = ISO8601DateFormatter()
-        let timestamp = isoFormatter.string(from: dateValue)
+        // DATE-01: no date in the item → undated, never a year-1 Date header.
+        let timestamp = dateValue.map { isoFormatter.string(from: $0) } ?? MBOXParser.undatedTimestamp
 
         let replyTo = properties.stringProperty(.replyToAddress)
         let references = properties.stringProperty(.references)
@@ -146,9 +146,9 @@ struct MSGParser {
         var headers: [String: String] = [
             "From": from,
             "To": to,
-            "Subject": subject,
-            "Date": timestamp
+            "Subject": subject
         ]
+        if dateValue != nil { headers["Date"] = timestamp }
         if !cc.isEmpty { headers["Cc"] = cc }
         if !bcc.isEmpty { headers["Bcc"] = bcc }
         if let messageID = properties.stringProperty(.internetMessageId) {

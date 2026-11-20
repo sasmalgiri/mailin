@@ -840,10 +840,17 @@ struct MBOXParser {
     /// The date the archive stores for `email`: its `Date` header, else the
     /// fallback recorded in its timestamp at parse time, else nil.
     static func effectiveDate(for email: RawEmail) -> Date? {
-        if let date = parseDate(email.headers["Date"]) { return date }
-        guard email.timestamp != undatedTimestamp, let date = unsafe cachedISOFormatter.date(from: email.timestamp) else { return nil }
+        // DATE-01: a year before 1900 is a broken header (the real Enron mail
+        // has "Dec 0001"), not a date — the message is undated.
+        if let date = parseDate(email.headers["Date"]), date >= firstRealDate { return date }
+        guard email.timestamp != undatedTimestamp, let date = unsafe cachedISOFormatter.date(from: email.timestamp),
+              date >= firstRealDate else { return nil }
         return date
     }
+
+    /// DATE-01: the earliest date taken as real (1 Jan 1900 UTC), the same
+    /// floor the search shards and the shown ranges use.
+    static let firstRealDate = Date(timeIntervalSince1970: -2_208_988_800)
 
     static func extractDomains(from headers: [String: String]) -> [String] {
         var domains = Set<String>()

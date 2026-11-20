@@ -2013,7 +2013,8 @@ enum BoundedRegexSearch {
         let iso = ISO8601DateFormatter()
         func inDateScope(_ email: MBOXParser.RawEmail) -> Bool {
             guard hasDateBounds else { return true }
-            guard let d = iso.date(from: email.timestamp) else { return false }
+            _ = iso
+            guard let d = MBOXParser.effectiveDate(for: email) else { return false }   // DATE-06: undated is out of a dated scope
             return d >= lo && d < hi
         }
 

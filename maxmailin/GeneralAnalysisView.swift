@@ -1160,13 +1160,13 @@ struct GeneralAnalysisView: View {
     private func computeDateRange() -> String {
         if v3Analysis, let range = archiveComposition?.dateRange, let first = range.0, let last = range.1 {
             let f = DateFormatter()
-            f.dateFormat = "MMM yy"
+            f.dateFormat = "MMM yyyy"   // DATE-05: "Jan 01" read as 2001
             return "\(f.string(from: first))-\(f.string(from: last))"
         }
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
-        f.dateFormat = "MMM yy"
+        f.dateFormat = "MMM yyyy"   // DATE-05
         return "\(f.string(from: first))-\(f.string(from: last))"
     }
 }

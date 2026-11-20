@@ -11,7 +11,13 @@ struct EmailThread: Identifiable {
     /// "allEmails" — because it is a bounded per-thread list, never a corpus.
     var members: [MBOXParser.RawEmail] { [root] + replies }
     var count: Int { members.count }
-    var latestTimestamp: String { members.map(\.timestamp).max() ?? root.timestamp }
+    var latestTimestamp: String {
+        // DATE-04: by date, not by text (raw RFC 2822 "Tue, …" and ISO strings do not sort as text).
+        let latest = members.max { (MBOXParser.effectiveDate(for: $0) ?? .distantPast) < (MBOXParser.effectiveDate(for: $1) ?? .distantPast) }
+        return latest?.timestamp ?? root.timestamp
+    }
+    /// DATE-04: the newest real date in the thread (nil when none is dated).
+    var latestDate: Date? { members.compactMap { MBOXParser.effectiveDate(for: $0) }.max() }
 }
 
 struct ThreadGrouper {
@@ -23,10 +29,16 @@ struct ThreadGrouper {
             threadMap[key, default: []].append(email)
         }
 
-        let isoFormatter = ISO8601DateFormatter()
         return threadMap.compactMap { key, members in
-            let sorted = members.sorted {
-                ($0.timestamp) < ($1.timestamp)
+            // DATE-04: oldest first by the message's real date; undated last, so an
+            // undated message never becomes the root of a dated conversation.
+            let sorted = members.sorted { a, b in
+                switch (MBOXParser.effectiveDate(for: a), MBOXParser.effectiveDate(for: b)) {
+                case let (x?, y?): return x < y
+                case (_?, nil): return true
+                case (nil, _?): return false
+                case (nil, nil): return a.timestamp < b.timestamp
+                }
             }
             guard let root = sorted.first else { return nil }
             let subject = root.headers["Subject"] ?? "(No Subject)"
@@ -37,10 +49,7 @@ struct ThreadGrouper {
                 replies: Array(sorted.dropFirst())
             )
         }
-        .sorted {
-            isoFormatter.date(from: $0.latestTimestamp) ?? .distantPast >
-            isoFormatter.date(from: $1.latestTimestamp) ?? .distantPast
-        }
+        .sorted { ($0.latestDate ?? .distantPast) > ($1.latestDate ?? .distantPast) }
     }
 
     private static func normalizedThreadKey(for email: MBOXParser.RawEmail) -> String {

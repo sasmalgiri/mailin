@@ -78,7 +78,7 @@ struct AIWindowButton: View {
         let text = model.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { query.text = text }
         if model.startDate > .distantPast { query.afterDate = model.startDate }
-        if model.endDate < .distantFuture { query.beforeDate = model.endDate }
+        if let bound = model.effectiveEndBound { query.beforeDate = bound }   // DATE-02
         return AIAssistantScope(filteredQuery: query, selectedIDs: [])
     }
 

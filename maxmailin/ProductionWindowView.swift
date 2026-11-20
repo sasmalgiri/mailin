@@ -312,7 +312,10 @@ enum ProductionEngine {
                     lines.append("Attachments: " + email.attachments.map(\.filename).joined(separator: ", "))
                 }
                 lines.append("")
-                lines.append(contentsOf: (email.plainBody.isEmpty ? email.htmlBody : email.plainBody).components(separatedBy: .newlines))
+                // EXP-01: an HTML-only message is produced as readable text, never as tags and CSS;
+                // CRLF bodies split once per line (no blank line after each).
+                let producedBody = email.plainBody.isEmpty ? HTMLReadableText.readable(email.htmlBody) : email.plainBody
+                lines.append(contentsOf: producedBody.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n"))
                 let raw = email.rawSource.isEmpty ? email.plainBody : email.rawSource
                 let hash = SHA256.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
                 let pdfURL = pdfFolder.appendingPathComponent("\(batesNumber).pdf")

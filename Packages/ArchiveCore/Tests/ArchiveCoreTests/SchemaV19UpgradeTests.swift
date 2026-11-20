@@ -92,7 +92,15 @@ final class SchemaV19UpgradeTests: XCTestCase {
         let after = try tableCounts(path)
         XCTAssertEqual(after.version, SQLiteEmailStore.currentSchemaVersion)
         for t in ["email_recovery", "email_custom_values", "script_runs"] { XCTAssertNotNil(after.counts[t], "v20 table \(t)") }
-        for (table, n) in before.counts { XCTAssertEqual(after.counts[table], n, "rows in \(table)") }
+        for (table, n) in before.counts {
+            if table == "meta" {
+                // CLOSE-08 (2026-11-19): the upgrade records one-time jobs it ran
+                // (e.g. `search_doc_runs_backfilled`) — keys are added, none removed.
+                XCTAssertGreaterThanOrEqual(after.counts[table] ?? 0, n, "rows in \(table)")
+            } else {
+                XCTAssertEqual(after.counts[table], n, "rows in \(table)")
+            }
+        }
 
         // The legal and review data reads back as v19 wrote it.
         let held = try await store.legalHoldCount()

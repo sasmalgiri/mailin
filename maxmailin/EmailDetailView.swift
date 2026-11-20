@@ -1969,14 +1969,12 @@ struct EmailDetailView: View {
         let safeName = subjectLine.replacingOccurrences(of: "[^A-Za-z0-9 ]", with: "_", options: .regularExpression)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(safeName).pdf")
 
-        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
-        let renderer = UIGraphicsPDFRenderer(bounds: pageRect)
+        // PRINT-01 (iOS): every page, not one clipped page — the paginated renderer
+        // the other exports use, over the email's readable text.
+        let readableBody = shown.plainBody.isEmpty ? HTMLReadableText.readable(shown.htmlBody) : shown.plainBody
+        _ = attrString
         do {
-            let pdfData = renderer.pdfData { ctx in
-                ctx.beginPage()
-                let textRect = pageRect.insetBy(dx: 36, dy: 36)
-                attrString.draw(in: textRect)
-            }
+            let pdfData = PaginatedTextRenderer.pdf(headerText + "\n\n" + readableBody)
             try pdfData.write(to: url, options: .atomic)
             iOSShareFile(at: url)
         } catch {

@@ -3615,7 +3615,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
     /// Min/max stored date as unix seconds.
     func dateRangeSeconds() throws -> (min: Int64?, max: Int64?) {
         let db = try ensureDB()
-        let stmt = try prepare(db, "SELECT MIN(date), MAX(date) FROM emails;")
+        let stmt = try prepare(db, "SELECT MIN(date), MAX(date) FROM emails WHERE date >= \(Self.firstRealDateSeconds);")   // DATE-01: placeholders out
         defer { sqlite3_finalize(stmt) }
         guard try stepRow(stmt, db) else { return (nil, nil) }
         let lo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
@@ -3634,7 +3634,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let db = try ensureDB()
         let stmt = try prepare(db, """
             SELECT strftime('%Y-%m', date, 'unixepoch') AS m, COUNT(*) AS c
-            FROM emails GROUP BY m ORDER BY m;
+            FROM emails WHERE date >= \(Self.firstRealDateSeconds) GROUP BY m ORDER BY m;
         """)
         defer { sqlite3_finalize(stmt) }
         var out: [AggregateBucket] = []
@@ -3653,7 +3653,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
         let stmt = try prepare(db, """
             SELECT strftime('%Y-%m', e.date, 'unixepoch') AS m, COUNT(*) AS c
-            FROM emails e WHERE \(whereSQL) GROUP BY m ORDER BY m;
+            FROM emails e WHERE \(whereSQL) AND e.date >= \(Self.firstRealDateSeconds) GROUP BY m ORDER BY m;
         """)
         defer { sqlite3_finalize(stmt) }
         _ = bindQueryValues(stmt, binds, startingAt: 1)
@@ -4352,6 +4352,40 @@ actor SQLiteEmailStore: EmailArchiveStore {
         let lo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
         let hi = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 1)
         return (lo, hi)
+    }
+
+    /// WIN-03: attachments over what a non-text query lists (the rows `count` counts).
+    func attachmentTotal(_ query: EmailQuery) throws -> Int {
+        let db = try ensureDB()
+        let (filterSQL, binds) = Self.filterClauses(query)
+        var clauses = filterSQL
+        if !query.hasStructuredFilters { clauses.append(Self.notTrashedPredicate) }
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, "SELECT COALESCE(SUM(e.attachment_count), 0) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return 0 }
+        return Int(sqlite3_column_int64(stmt, 0))
+    }
+
+    /// WIN-03: attachments among `candidates` that satisfy the non-text filters.
+    func attachmentTotal(among candidates: [UUID], query: EmailQuery) throws -> Int {
+        guard !candidates.isEmpty else { return 0 }
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        var total = 0
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var whereSQL = "e.id IN (\(placeholders))"
+            if !clauses.isEmpty { whereSQL += " AND " + clauses.joined(separator: " AND ") }
+            let stmt = try prepare(db, "SELECT COALESCE(SUM(e.attachment_count), 0) FROM emails e WHERE \(whereSQL);")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, binds, startingAt: idx)
+            if try stepRow(stmt, db) { total += Int(sqlite3_column_int64(stmt, 0)) }
+        }
+        return total
     }
 
     /// LIST-01: first and last date among `candidates` that satisfy the
@@ -6369,7 +6403,9 @@ actor SQLiteEmailStore: EmailArchiveStore {
             rawSource: raw,
             messageType: messageType,
             attachments: [],
-            timestamp: ISO8601DateFormatter().string(from: date),
+            // DATE-01: an undated row reads back as undated, not as year 1.
+            timestamp: date.timeIntervalSince1970 < Double(Self.firstRealDateSeconds)
+                ? MBOXParser.undatedTimestamp : ISO8601DateFormatter().string(from: date),
             domains: [],
             plainBody: plain,
             htmlBody: html,
@@ -6689,7 +6725,8 @@ extension SQLiteEmailStore {
     func custodianTotals() throws -> [CustodianTotals] {
         let db = try ensureDB()
         let stmt = try prepare(db, """
-            SELECT c.custodian, COUNT(*), COUNT(h.email_id), MIN(e.date), MAX(e.date)
+            SELECT c.custodian, COUNT(*), COUNT(h.email_id),
+                   MIN(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END), MAX(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END)
             FROM custodian_assignments c
             JOIN emails e ON e.id = c.email_id
             LEFT JOIN legal_holds h ON h.email_id = c.email_id
@@ -7591,7 +7628,7 @@ extension SQLiteEmailStore {
         let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
         let stmt = try prepare(db, """
             SELECT COUNT(*), COUNT(DISTINCT lower(e.from_addr)),
-                   MIN(CASE WHEN e.date > 0 THEN e.date END), MAX(CASE WHEN e.date > 0 THEN e.date END)
+                   MIN(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END), MAX(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END)
             FROM emails e WHERE \(whereSQL);
         """)
         defer { sqlite3_finalize(stmt) }
@@ -7661,7 +7698,7 @@ extension SQLiteEmailStore {
         let stmt = try prepare(db, """
             SELECT CAST(strftime('%w', e.date, 'unixepoch') AS INTEGER),
                    CAST(strftime('%H', e.date, 'unixepoch') AS INTEGER), COUNT(*)
-            FROM emails e WHERE \(whereSQL) GROUP BY 1, 2;
+            FROM emails e WHERE \(whereSQL) AND e.date >= \(Self.firstRealDateSeconds) GROUP BY 1, 2;
         """)
         defer { sqlite3_finalize(stmt) }
         _ = bindQueryValues(stmt, binds, startingAt: 1)

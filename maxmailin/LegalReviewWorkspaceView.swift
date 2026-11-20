@@ -1932,8 +1932,8 @@ struct LegalReviewWorkspaceView: View {
 
                 Spacer()
 
-                if visibleEmails.count != archiveTotal {
-                    Text("Showing \(visibleEmails.count) of \(archiveTotal)")
+                if visibleEmails.count != workingSet.count {   // WIN-01: of the review's working set
+                    Text("Showing \(visibleEmails.count) of \(workingSet.count)")
                         .font(.system(size: 9)).foregroundColor(.indigo)
                         .help("Filters are active — not all documents are shown")
                 }

@@ -67,7 +67,7 @@ enum MBOXRecordBuilder {
         if let raw = email.headers["Date"], let parsed = MBOXParser.parseDate(raw) {
             return parsed
         }
-        if let parsed = ISO8601DateFormatter().date(from: email.timestamp) {
+        if let parsed = MBOXParser.effectiveDate(for: email) {   // DATE-06: never the undated marker as 1970
             return parsed
         }
         return Date()

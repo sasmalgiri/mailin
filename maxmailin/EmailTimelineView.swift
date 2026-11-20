@@ -108,7 +108,7 @@ struct EmailTimelineView: View {
                 dateFormatter.dateFormat = "MMM d, yyyy"
                 label = dateFormatter.string(from: key)
             case .week:
-                dateFormatter.dateFormat = "MMM d"
+                dateFormatter.dateFormat = "MMM d, yyyy"   // DATE-05: weeks span years in an archive
                 let endOfWeek = calendar.date(byAdding: .day, value: 6, to: key) ?? key
                 label = "\(dateFormatter.string(from: key)) - \(dateFormatter.string(from: endOfWeek))"
             case .month:

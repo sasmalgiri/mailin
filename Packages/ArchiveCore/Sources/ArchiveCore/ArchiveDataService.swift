@@ -64,6 +64,11 @@ final class ArchiveDataService {
         try await repository.dateSpan(query: scoped(query))
     }
 
+    /// WIN-03: attachments over everything the query lists (scoped as the list is).
+    func attachmentTotal(query: EmailQuery = .all) async throws -> Int? {
+        try await repository.attachmentTotal(query: scoped(query))
+    }
+
     /// The count WITHOUT the tier's scope — what the archive holds in total,
     /// for the Free banners that say "first 500 of 526" and "26 more with
     /// Personal". Never used to fetch rows.

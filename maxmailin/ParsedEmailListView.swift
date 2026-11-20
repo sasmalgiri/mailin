@@ -604,6 +604,13 @@ struct ParsedEmailListView: View {
                         .padding(.vertical, 2)
                         .background(AppColors.primary)
                         .clipShape(Capsule())
+                    // WIN-04: a chip or pinned filter narrows only the loaded emails.
+                    if model.isNarrowedWithinLoaded {
+                        Text("of \(model.loadedEmailCount) loaded")
+                            .font(.system(.caption2, design: .rounded))
+                            .foregroundColor(AppColors.secondary)
+                            .help("These filters work on the emails loaded so far. Scroll on, or clear them, to see more.")
+                    }
                     // PERF-02: the page is shown before the exact total is counted.
                     if model.isCountingTotal {
                         ProgressView()
@@ -1517,7 +1524,7 @@ struct ParsedEmailListView: View {
                         icon: "line.3.horizontal.decrease.circle",
                         title: empty.title,
                         message: hasAnyQuickFilterActive
-                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.visibleEmails.count) emails."
+                            ? "Active filter chips are hiding all emails. Clear them to see your \(model.queryTotalCount) emails."   // WIN-04: the list's total
                             : (empty.message ?? "")
                     )
                     if hasAnyQuickFilterActive {
@@ -2408,7 +2415,7 @@ struct ParsedEmailListView: View {
 
     private static let forensicDateFormatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "MM/dd/yy"
+        f.dateFormat = "MM/dd/yyyy"   // DATE-05
         return f
     }()
 
@@ -3323,7 +3330,9 @@ struct ParsedEmailListView: View {
 
     // MARK: - Download All Attachments
     private var totalAttachments: Int {
-        model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
+        // WIN-03: the save streams the whole list, so the count is the whole list's.
+        if !model.isNarrowedWithinLoaded, let total = model.queryAttachmentTotal { return total }
+        return model.visibleEmails.map { $0.attachments.count }.reduce(0, +)
     }
     private static let freeAttachmentLimit = StoreManager.freeAttachmentDownloadsPerDay
     @AppStorage("freeAttachmentDownloadCount") private var freeAttachmentDownloadCount: Int = 0

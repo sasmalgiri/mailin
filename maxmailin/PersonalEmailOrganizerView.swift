@@ -1758,7 +1758,7 @@ struct PersonalEmailOrganizerView: View {
         let dates = workingSet.compactMap { MBOXParser.parseDate($0.headers["Date"] ?? "") }
         guard let first = dates.min(), let last = dates.max() else { return "N/A" }
         let f = DateFormatter()
-        f.dateFormat = "MMM yy"
+        f.dateFormat = "MMM yyyy"   // DATE-05
         return "\(f.string(from: first))-\(f.string(from: last))"
     }
 

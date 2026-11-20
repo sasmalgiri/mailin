@@ -562,7 +562,7 @@ struct ExportManager {
     /// script-escaped). The export writes prefix + entries + suffix incrementally.
     static func portableHTMLEntryJSON(email: MBOXParser.RawEmail) -> String? {
         let plainBody = email.plainBody.isEmpty
-            ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+            ? HTMLReadableText.readable(email.htmlBody)   /* EXP-01 */
             : email.plainBody
         let preview = String(plainBody.prefix(120)).replacingOccurrences(of: "\n", with: " ")
         let entry = PortableHTMLEntry(
@@ -774,7 +774,7 @@ struct ExportManager {
             text += "Attachments: \(email.attachments.map(\.filename).joined(separator: ", "))\n"
         }
         text += "\n"
-        text += email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
+        text += email.plainBody.isEmpty ? HTMLReadableText.readable(email.htmlBody)   /* EXP-01 */ : email.plainBody
         return text
     }
 
@@ -826,7 +826,7 @@ struct ExportManager {
     /// (HTML tags stripped when there is no plain body).
     static func singlePDFText(_ email: MBOXParser.RawEmail) -> String {
         let headerText = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nDate: \(email.headers["Date"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n"
-        let body = email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
+        let body = email.plainBody.isEmpty ? HTMLReadableText.readable(email.htmlBody)   /* EXP-01 */ : email.plainBody
         return headerText + "\n" + body
     }
 
@@ -845,7 +845,7 @@ struct ExportManager {
         }
 
         let headerText = "From: \(email.headers["From"] ?? "")\nTo: \(email.headers["To"] ?? "")\nDate: \(email.headers["Date"] ?? "")\nSubject: \(email.headers["Subject"] ?? "")\n"
-        let body = email.plainBody.isEmpty ? email.htmlBody.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression) : email.plainBody
+        let body = email.plainBody.isEmpty ? HTMLReadableText.readable(email.htmlBody)   /* EXP-01 */ : email.plainBody
 
         let fullText = headerText + "\n" + body
         let attributed = NSAttributedString(string: fullText, attributes: [

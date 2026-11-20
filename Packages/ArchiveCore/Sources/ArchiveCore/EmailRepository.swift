@@ -223,11 +223,14 @@ protocol EmailRepository: Sendable {
     /// everything the query lists — the same rows `count` counts, not the
     /// page window. Nil when unknown or empty.
     func dateSpan(query: EmailQuery) async throws -> (first: Date?, last: Date?)
+    /// WIN-03: attachments over everything the query lists (nil = unknown).
+    func attachmentTotal(query: EmailQuery) async throws -> Int?
 }
 
 extension EmailRepository {
     /// Repositories without a store answer "unknown"; the UI then shows no range.
     func dateSpan(query: EmailQuery) async throws -> (first: Date?, last: Date?) { (nil, nil) }
+    func attachmentTotal(query: EmailQuery) async throws -> Int? { nil }
 }
 
 /// Production implementation over the current SwiftData `EmailStore` + FTS5.
@@ -398,6 +401,24 @@ struct EmailStoreRepository: EmailRepository {
             return dates((lo, hi))
         }
         return dates(try await sqlite.dateSpanSeconds(query))
+    }
+
+    func attachmentTotal(query: EmailQuery) async throws -> Int? {
+        guard let sqlite = store as? SQLiteEmailStore else { return nil }
+        if let text = query.text, !text.isEmpty {
+            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            let years = FTSSearchIndex.shardYears(after: query.afterDate, before: query.beforeDate)
+            var cursor: FTSSearchIndex.RankedCursor? = nil
+            var total = 0
+            while true {
+                let (hits, cont) = try await fts.searchRanked(ftsQuery, years: years, limit: 1_000, cursor: cursor)
+                if !hits.isEmpty { total += try await sqlite.attachmentTotal(among: hits.map(\.id), query: query) }
+                guard let next = cont else { break }
+                cursor = next
+            }
+            return total
+        }
+        return try await sqlite.attachmentTotal(query)
     }
 
     private func exactStreamedTextCount(ftsQuery: String, query: EmailQuery) async throws -> Int {

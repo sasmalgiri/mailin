@@ -63,15 +63,11 @@ enum BatesPDFRenderer {
         let bodyFont = PlatformFont.monospacedSystemFont(ofSize: 10, weight: .regular)
         let headerFont = PlatformFont.systemFont(ofSize: 8, weight: .medium)
         let batesFont = PlatformFont.monospacedSystemFont(ofSize: 9, weight: .bold)
-        #if os(macOS)
-        let labelColor = PlatformColor.labelColor
-        let secondaryLabelColor = PlatformColor.secondaryLabelColor
-        let separatorColor = PlatformColor.separatorColor
-        #else
-        let labelColor = PlatformColor.label
-        let secondaryLabelColor = PlatformColor.secondaryLabel
-        let separatorColor = PlatformColor.separator
-        #endif
+        // EXP-02 (deep dive 2026-11-20): fixed print colours. The system label
+        // colours follow Dark Mode and drew near-white text on the white page.
+        let labelColor = PlatformColor(red: 0, green: 0, blue: 0, alpha: 1)
+        let secondaryLabelColor = PlatformColor(red: 0.35, green: 0.35, blue: 0.35, alpha: 1)
+        let separatorColor = PlatformColor(red: 0.75, green: 0.75, blue: 0.75, alpha: 1)
         let bodyAttrs: [NSAttributedString.Key: Any] = [.font: bodyFont, .foregroundColor: labelColor]
         let headerAttrs: [NSAttributedString.Key: Any] = [.font: headerFont, .foregroundColor: secondaryLabelColor]
         let batesAttrs: [NSAttributedString.Key: Any] = [.font: batesFont, .foregroundColor: labelColor]

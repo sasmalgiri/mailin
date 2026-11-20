@@ -102,7 +102,8 @@ struct ArchiveListView: View {
             ArchiveDetailHost(
                 detail: detail,
                 orderedIDs: model.visibleOrderedIDs,
-                onNavigate: { id in selectedID = id }
+                onNavigate: { id in selectedID = id },
+                pager: model
             )
         }
         .task {
@@ -306,6 +307,8 @@ struct ArchiveListPane: View {
         }
         selectedID = ids[next]
         if next >= ids.count - 5, model.hasMore { Task { await model.loadNextPage() } }
+        // LIST-02: the up arrow carries on into the page before the window.
+        if next <= 4, delta < 0, model.hasPrevious { Task { await model.loadPreviousPage() } }
     }
 
     private func openSelectionInWindow() {
@@ -383,6 +386,9 @@ struct ArchiveDetailHost: View {
     /// from ArchiveListViewModel's page state, never a corpus array).
     var orderedIDs: [EmailID] = []
     var onNavigate: ((EmailID) -> Void)? = nil
+    /// LIST-02: the list's pager, so the detail shows "N of total" and next /
+    /// previous carry on past the loaded window (as in the Advanced list).
+    var pager: ArchiveListViewModel? = nil
 
     var body: some View {
         switch detail.state {
@@ -393,7 +399,17 @@ struct ArchiveDetailHost: View {
             ProgressView("Loading email…")
                 .accessibilityIdentifier("archive.detail.loading")
         case .loaded(let email):
-            EmailDetailView(email: email, orderedIDs: orderedIDs, onNavigate: onNavigate)
+            EmailDetailView(email: email, orderedIDs: orderedIDs, onNavigate: onNavigate,
+                            positionOffset: pager?.windowOffset ?? 0,
+                            listTotal: pager?.totalCount,
+                            canPageForward: pager?.hasMore ?? false,
+                            canPageBackward: pager?.hasPrevious ?? false,
+                            loadAdjacentPage: pager.map { list in
+                                { @MainActor forward in
+                                    if forward { await list.loadNextPage() } else { await list.loadPreviousPage() }
+                                    return list.visibleOrderedIDs
+                                }
+                            })
                 .accessibilityIdentifier("archive.detail.loaded")
         case .failed(_, let message):
             ArchiveLoadFailureView(message: message, retry: nil)

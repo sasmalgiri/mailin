@@ -871,7 +871,8 @@ enum RawSourceRecovery {
         }
 
         static func date(of email: MBOXParser.RawEmail) -> Date? {
-            parseDate(email.timestamp) ?? parseDate(email.headers["Date"] ?? "")
+            // DATE-06: the undated marker is no date (it parses as 1970).
+            (email.timestamp == MBOXParser.undatedTimestamp ? nil : parseDate(email.timestamp)) ?? parseDate(email.headers["Date"] ?? "")
         }
 
         static func parseDate(_ text: String) -> Date? {

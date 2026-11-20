@@ -184,7 +184,11 @@ enum ArchiveQueryCompiler {
     static func parseDate(_ value: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
+        // DATE-03 (deep dive 2026-11-20): a typed day is a day on this Mac's
+        // calendar — the zone the list shows dates in and the guided search
+        // writes them in. UTC made `after:2024-03-05` drop the morning of the
+        // 5th east of Greenwich and add the evening of the 4th west of it.
+        formatter.timeZone = .current
         for format in ["yyyy-MM-dd", "yyyy/MM/dd", "MM/dd/yyyy"] {
             formatter.dateFormat = format
             if let date = formatter.date(from: value) { return date }

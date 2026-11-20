@@ -537,6 +537,11 @@ enum ScopeJob {
 
     /// Human-readable scope for receipts.
     nonisolated static func describe(_ q: EmailQuery) -> String {
+        // Dates in this Mac's zone with its offset: a typed day is local
+        // midnight (DATE-03), so UTC would name the day before east of
+        // Greenwich; the offset keeps the instant exact for the record.
+        let iso = ISO8601DateFormatter()
+        iso.timeZone = .current
         var parts: [String] = []
         if let t = q.text, !t.isEmpty { parts.append("search “\(t)”") }
         if let r = q.recovery { parts.append(r == "any" ? "recovered" : "recovery \(r)") }
@@ -544,8 +549,8 @@ enum ScopeJob {
         if let r = q.recipient { parts.append("to \(r)") }
         if let d = q.domain { parts.append("domain \(d)") }
         if let tag = q.userTag { parts.append("tag \(tag)") }
-        if let a = q.afterDate { parts.append("after \(ISO8601DateFormatter().string(from: a))") }
-        if let b = q.beforeDate { parts.append("before \(ISO8601DateFormatter().string(from: b))") }
+        if let a = q.afterDate { parts.append("after \(iso.string(from: a))") }
+        if let b = q.beforeDate { parts.append("before \(iso.string(from: b))") }
         if let f = q.sourceFileName { parts.append("source \(f)") }
         // §3-Q4: what was left out is part of the scope.
         for ex in q.exclusions ?? [] {
@@ -554,7 +559,7 @@ enum ScopeJob {
             case .pinned: parts.append("not pinned")
             case .before, .after:
                 let d = Date(timeIntervalSince1970: TimeInterval(Int64(ex.value) ?? 0))
-                parts.append("not \(ex.field.rawValue) \(ISO8601DateFormatter().string(from: d))")
+                parts.append("not \(ex.field.rawValue) \(iso.string(from: d))")
             default: parts.append("not \(ex.field.rawValue) \(ex.value)")
             }
         }

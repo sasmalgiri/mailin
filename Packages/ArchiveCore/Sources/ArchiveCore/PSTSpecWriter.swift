@@ -1025,7 +1025,8 @@ final class PSTSpecWriter: PSTStreamWriting {
         }
 
         mutating func write() throws -> (data: UInt64, sub: UInt64) {
-            let date = ISO8601DateFormatter().date(from: email.timestamp) ?? RFC5322Date.parse(header("Date") ?? "") ?? Date(timeIntervalSince1970: 0)
+            // DATE-06: the message's real date; the undated marker is not a 1970 delivery time.
+            let date = MBOXParser.effectiveDate(for: email) ?? RFC5322Date.parse(header("Date") ?? "") ?? Date(timeIntervalSince1970: 0)
             let from = PSTSpecWriter.addresses(header("From")).first
             let to = PSTSpecWriter.addresses(header("To")), cc = PSTSpecWriter.addresses(header("Cc")), bcc = PSTSpecWriter.addresses(header("Bcc"))
             let subject = header("Subject") ?? ""

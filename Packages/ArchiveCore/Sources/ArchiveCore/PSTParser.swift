@@ -271,15 +271,17 @@ struct PSTParser {
 
     static func rawEmail(from msg: PSTReader.PSTMessage, senderEmail: String, isoFormatter: ISO8601DateFormatter) -> MBOXParser.RawEmail {
             let from = msg.senderEmail.isEmpty ? msg.senderName : "\(msg.senderName) <\(msg.senderEmail)>"
-            let timestamp = isoFormatter.string(from: msg.deliveryTime ?? msg.creationTime ?? .distantPast)
+            // DATE-01: no delivery or creation time → undated, never a year-1 Date header.
+            let itemDate = msg.deliveryTime ?? msg.creationTime
+            let timestamp = itemDate.map { isoFormatter.string(from: $0) } ?? MBOXParser.undatedTimestamp
             let messageType = !senderEmail.isEmpty && from.lowercased().contains(senderEmail.lowercased()) ? "sent" : "received"
 
             var headers: [String: String] = [
                 "From": from,
                 "To": msg.displayTo,
-                "Subject": msg.subject,
-                "Date": timestamp
+                "Subject": msg.subject
             ]
+            if itemDate != nil { headers["Date"] = timestamp }
             if !msg.displayCc.isEmpty { headers["Cc"] = msg.displayCc }
             if !msg.displayBcc.isEmpty { headers["Bcc"] = msg.displayBcc }
             if let msgID = msg.internetMessageId { headers["Message-ID"] = msgID }

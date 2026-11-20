@@ -13938,3 +13938,69 @@ final class PrintableTextTests: XCTestCase {
     }
 }
 #endif
+
+/// Deep dive 2026-11-20 — the app-side fixes: DATE-02 (the end date includes
+/// its day), DATE-04 (threads order by real dates, undated last), WIN-02 (a
+/// selection reaches rows scrolled out of the loaded window), WIN-04 (an
+/// in-window filter says it narrows the loaded emails).
+@MainActor
+final class DeepDiveAppFixesTests: XCTestCase {
+    private func makeVM(_ count: Int, pageSize: Int, maxRetained: Int) async throws -> (ParsedEmailListViewModel, SQLiteEmailStore) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-deepdive-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let emails = (0..<count).map { i in
+            MBOXParser.RawEmail(headers: ["Message-ID": "<dd\(i)@x>", "From": "a@x.com", "To": "b@x.com", "Subject": "DD \(i)",
+                                          "Date": "Wed, \(String(format: "%02d", 1 + i % 28)) Jan 2025 14:30:00 +0000"],
+                                rawSource: "", messageType: "received", attachments: [],
+                                timestamp: "2025-01-\(String(format: "%02d", 1 + i % 28))T14:30:00Z", domains: ["x.com"], plainBody: "b \(i)", htmlBody: "")
+        }
+        try await store.insertBatch(emails, batchSize: 200)
+        try await fts.indexBatch(emails)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: archive, pageSize: pageSize, maxRetained: maxRetained)
+        vm.isPremiumUser = true
+        return (vm, store)
+    }
+
+    func testEndDate_includesTheWholeDayItNames() async throws {
+        let (vm, _) = try await makeVM(3, pageSize: 10, maxRetained: 50)
+        XCTAssertNil(vm.effectiveEndBound, "no end date, no bound")
+        var parts = DateComponents(); parts.year = 2024; parts.month = 3; parts.day = 10; parts.hour = 15
+        vm.endDate = try XCTUnwrap(Calendar.current.date(from: parts))
+        var next = DateComponents(); next.year = 2024; next.month = 3; next.day = 11
+        XCTAssertEqual(vm.effectiveEndBound, Calendar.current.date(from: next), "the query's bound is the start of the next day")
+        XCTAssertEqual(vm.browseState.beforeDate, Calendar.current.date(from: next))
+    }
+
+    func testThreads_orderByRealDates_andAnUndatedMessageIsNeverTheRoot() {
+        func mail(_ subject: String, date: String?, ts: String) -> MBOXParser.RawEmail {
+            var headers = ["Subject": subject, "From": "a@x.com"]
+            if let date { headers["Date"] = date }
+            return MBOXParser.RawEmail(headers: headers, rawSource: "", messageType: "received", attachments: [], timestamp: ts,
+                                       domains: [], plainBody: "", htmlBody: "")
+        }
+        let undated = mail("Plan", date: nil, ts: MBOXParser.undatedTimestamp)
+        let first = mail("Re: Plan", date: "Tue, 2 Jan 2001 10:00:00 +0000", ts: "Tue, 2 Jan 2001 10:00:00 +0000")
+        let second = mail("Re: Plan", date: "Wed, 3 Jan 2001 10:00:00 +0000", ts: "2001-01-03T10:00:00Z")
+        let threads = ThreadGrouper.group([undated, second, first])
+        let thread = try? XCTUnwrap(threads.first)
+        XCTAssertEqual(thread?.root.id, first.id, "the oldest dated message is the root (text order put the RFC 2822 one after ISO)")
+        XCTAssertEqual(thread?.replies.last?.id, undated.id, "undated last")
+    }
+
+    func testSelection_reachesRowsScrolledOutOfTheWindow() async throws {
+        let (vm, store) = try await makeVM(60, pageSize: 10, maxRetained: 20)
+        await vm.reloadForQueryChangeNow()
+        for _ in 0..<4 { await vm.loadNextPageNow() }
+        let loaded = Set(vm.visibleEmails.map(\.id))
+        let all = try await store.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: 100).map(\.id)
+        let outside = try XCTUnwrap(all.first { !loaded.contains($0) }, "the window holds fewer rows than the archive")
+        let inside = try XCTUnwrap(loaded.first)
+        let resolved = await vm.emails(for: [outside, inside])
+        XCTAssertEqual(Set(resolved.map(\.id)), [outside, inside], "a selected row outside the window is read back, not dropped")
+        XCTAssertFalse(vm.isNarrowedWithinLoaded, "no in-window filter: the count is the list's")
+        XCTAssertEqual(vm.displayedEmailCount, 60)
+    }
+}

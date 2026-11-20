@@ -914,6 +914,13 @@ enum ExportReconciliation {
             return .lost("added in output")
         }
         if oHeader.isEmpty { return notCarriedOrLost(.date, rules, "missing from output") }
+        // DATE-01 follow-up: a PST / MSG item without a delivery time comes back
+        // undated from the reader (no longer a year-1 date). Outlook shows the
+        // delivery time, so a date that survives only in the transport headers
+        // is still lost in the output.
+        if rules.kind == .pst || rules.kind == .msg, output.timestamp == MBOXParser.undatedTimestamp {
+            return .lost("no delivery time in the \(rules.kind.label) item")
+        }
         if sHeader == oHeader { return .unchanged }
         guard let sDate = parseDate(sHeader), let oDate = parseDate(oHeader) else {
             return .lost("changed (unparseable date compared as text)")

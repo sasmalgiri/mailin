@@ -81,6 +81,17 @@ class ParsedEmailListViewModel: ObservableObject {
     // MARK: - Filter State
     @Published var startDate: Date = .distantPast
     @Published var endDate: Date = .distantFuture
+
+    /// DATE-02 (deep dive 2026-11-20): the end date names a DAY and that day is
+    /// included — the query's exclusive bound is the start of the next day in
+    /// the Mac's calendar. Before, picking "10 Mar" hid all of 10 March, and
+    /// the suggested end (the newest email's own time) hid that newest email.
+    var effectiveEndBound: Date? {
+        guard endDate < .distantFuture else { return nil }
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: endDate)
+        return calendar.date(byAdding: .day, value: 1, to: day) ?? endDate
+    }
     @Published var selectedDomains: [String] = []
     @Published var selectedSubjects: [String] = []
     @Published var selectedFromEmails: [String] = []
@@ -378,6 +389,16 @@ class ParsedEmailListViewModel: ObservableObject {
     /// Whether the detail's next / previous can go past the loaded window.
     var canPageAfterWindow: Bool { visibleIsWholeWindow && hasMorePages }
     var canPageBeforeWindow: Bool { visibleIsWholeWindow && hasEarlierPages }
+    /// WIN-02: the emails for a selection, in list order where loaded; selected
+    /// rows that scrolled out of the window are read back from the archive.
+    func emails(for ids: Set<UUID>) async -> [MBOXParser.RawEmail] {
+        let loaded = visibleEmails.filter { ids.contains($0.id) }
+        let missing = ids.subtracting(loaded.map(\.id))
+        guard !missing.isEmpty else { return loaded }
+        let fetched = (try? await archive.fullEmails(ids: Array(missing))) ?? []
+        return loaded + fetched
+    }
+
     /// Loads the page after (or before) the window and returns the new order.
     func loadAdjacentPage(forward: Bool) async -> [UUID] {
         if forward { await loadNextPageNow() } else { await loadEarlierPageNow() }
@@ -448,7 +469,7 @@ class ParsedEmailListViewModel: ObservableObject {
         ArchiveBrowseState(
             searchText: searchText,
             afterDate: startDate > .distantPast ? startDate : nil,
-            beforeDate: endDate < .distantFuture ? endDate : nil,
+            beforeDate: effectiveEndBound,
             hasAttachments: hasAttachmentFilter ? true : nil,
             includeTrashed: false,
             sort: {
@@ -1511,9 +1532,11 @@ class ParsedEmailListViewModel: ObservableObject {
 
             var matchesDateOps = true
             if parsed.beforeDate != nil || parsed.afterDate != nil {
-                let emailDate = isoFmt.date(from: email.timestamp) ?? .distantPast
+                // DATE-06: the message's real date (the undated marker is not 1970), and the
+                // store's bounds — after: inclusive, before: exclusive.
+                let emailDate = MBOXParser.effectiveDate(for: email) ?? .distantPast
                 if let before = parsed.beforeDate, emailDate >= before { matchesDateOps = false }
-                if let after = parsed.afterDate, emailDate <= after { matchesDateOps = false }
+                if let after = parsed.afterDate, emailDate < after { matchesDateOps = false }
             }
 
             let matchesEvidenceTag: Bool
@@ -1569,13 +1592,12 @@ class ParsedEmailListViewModel: ObservableObject {
 
     // MARK: - Filtering Logic (in-window)
     private func filterMatch(_ email: MBOXParser.RawEmail) -> Bool {
-        let date = isoFormatter.date(from: email.timestamp)
-            ?? MBOXParser.parseDate(email.headers["Date"])
-            ?? .distantPast
+        let date = MBOXParser.effectiveDate(for: email) ?? .distantPast   // DATE-06
         let froms = allPossibleKeys(email.headers, for: "From")
         let tos = allPossibleKeys(email.headers, for: "To")
         let subject = email.headers["Subject"] ?? ""
-        let matchesDate = (startDate...endDate).contains(date)
+        // DATE-02: the same bounds as the store query (end day included, exclusive next-day bound).
+        let matchesDate = date >= startDate && date < (effectiveEndBound ?? .distantFuture)
         let matchesDomain = selectedDomains.isEmpty || !Set(email.domains).isDisjoint(with: selectedDomains)
         let matchesSubject = selectedSubjects.isEmpty || selectedSubjects.contains(subject)
         let matchesFrom = selectedFromEmails.isEmpty || selectedFromEmails.contains { candidate in froms.contains(candidate) }
@@ -1799,9 +1821,18 @@ class ParsedEmailListViewModel: ObservableObject {
 
     private func refreshQueryDateSpan(_ query: EmailQuery, revision: UInt64) async {
         let span = (try? await archive.dateSpan(query: query)) ?? (nil, nil)
+        let attachments = try? await archive.attachmentTotal(query: query)
         guard revision == windowRevision else { return }
         queryDateSpan = span
+        queryAttachmentTotal = attachments ?? nil
     }
+
+    /// WIN-03: attachments over the whole list (nil while unknown).
+    @Published private(set) var queryAttachmentTotal: Int?
+    /// WIN-04: an in-window refinement (quick chips, pinned, AI or evidence-tag
+    /// filters) narrows only the loaded emails; the header then says so.
+    var isNarrowedWithinLoaded: Bool { !visibleIsWholeWindow }
+    var loadedEmailCount: Int { residentEmails.count }
 
     /// For sidebar: returns senders sorted by their email count descending
     /// (store aggregate).

@@ -162,7 +162,8 @@ struct ArchiveThreePaneView: View {
             ArchiveDetailHost(
                 detail: detail,
                 orderedIDs: model.visibleOrderedIDs,
-                onNavigate: { id in selectedID = id }
+                onNavigate: { id in selectedID = id },
+                pager: model
             )
         }
         .task {

@@ -707,7 +707,7 @@ struct ExecutiveDashboardView: View {
 
     nonisolated private static func weekLabel(for date: Date, calendar: Calendar) -> String {
         let formatter = DateFormatter()
-        formatter.dateFormat = "MMM d"
+        formatter.dateFormat = "MMM d, yyyy"   // DATE-05
         return formatter.string(from: date)
     }
 

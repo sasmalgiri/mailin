@@ -2002,13 +2002,16 @@ struct ContentView: View {
                 .font(.largeTitle)
                 .adaptiveIconGradient(colors: [AppColors.primary, AppColors.primary.opacity(0.6)])
 
-            Text("\(selectedEmails.count) emails selected")
+            // WIN-02: the selection's own count — rows scrolled out of the loaded window stay selected.
+            Text("\(selectedEmailIDs.count) emails selected")
                 .font(Typography.title2)
                 .accessibilityAddTraits(.isHeader)
 
             VStack(spacing: Spacing.small) {
                 Button {
-                    exportSelectedEmails(selectedEmails)
+                    // WIN-02: the whole selection, the rows no longer loaded fetched from the archive.
+                    let ids = selectedEmailIDs
+                    Task { @MainActor in exportSelectedEmails(await modelVM.emails(for: ids)) }
                 } label: {
                     Label("Export Selected as EML", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: 260)
@@ -2018,7 +2021,8 @@ struct ContentView: View {
 
                 if attachmentCount > 0 {
                     Button {
-                        downloadAttachmentsFromEmails(selectedEmails)
+                        let ids = selectedEmailIDs
+                        Task { @MainActor in downloadAttachmentsFromEmails(await modelVM.emails(for: ids)) }
                     } label: {
                         Label("Download \(attachmentCount) Attachments", systemImage: "arrow.down.circle.fill")
                             .frame(maxWidth: 260)
@@ -2028,8 +2032,11 @@ struct ContentView: View {
                 }
 
                 Button {
-                    let subjects = selectedEmails.compactMap { $0.headers["Subject"] }.joined(separator: "\n")
-                    PlatformClipboard.copyString(subjects)
+                    let ids = selectedEmailIDs
+                    Task { @MainActor in
+                        let subjects = await modelVM.emails(for: ids).compactMap { $0.headers["Subject"] }.joined(separator: "\n")
+                        PlatformClipboard.copyString(subjects)
+                    }
                 } label: {
                     Label("Copy Subjects", systemImage: "doc.on.doc")
                         .frame(maxWidth: 260)
@@ -3150,6 +3157,12 @@ struct ContentView: View {
                 .foregroundColor(AppColors.secondary)
                 .contentTransition(.numericText())
                 .adaptiveAnimation(modelVM.displayedEmailCount)
+            // WIN-04: a chip or pinned filter narrows only the loaded emails.
+            if modelVM.isNarrowedWithinLoaded {
+                Text("of \(modelVM.loadedEmailCount) loaded")
+                    .font(Typography.caption1)
+                    .foregroundColor(AppColors.secondary)
+            }
             if modelVM.aiPinnedIDs != nil {
                 Button {
                     modelVM.aiPinnedIDs = nil
@@ -3241,6 +3254,16 @@ struct ContentView: View {
     private var filterSection: some View {
         VStack(alignment: .leading, spacing: Spacing.xSmall) {
             Divider()
+
+            // WIN-05 (deep dive 2026-11-20): these lists and their checkboxes work
+            // on the loaded emails; say so whenever the list holds more.
+            if modelVM.queryTotalCount > modelVM.loadedEmailCount, modelVM.loadedEmailCount > 0 {
+                Label("The senders, recipients, labels and domains below come from the \(modelVM.loadedEmailCount) loaded emails, and their checkboxes filter those.",
+                      systemImage: "info.circle")
+                    .font(Typography.caption2)
+                    .foregroundColor(AppColors.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if personaManager.showSection(.senders) {
                 SidebarSectionHeader(title: String(localized: "From (Senders)"), icon: "arrow.up.forward", color: AppColors.sentEmail, helpText: String(localized: "Filter emails by sender address"))
@@ -3693,7 +3716,7 @@ struct ContentView: View {
         let text = modelVM.searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty { query.text = text }
         if modelVM.startDate > .distantPast { query.afterDate = modelVM.startDate }
-        if modelVM.endDate < .distantFuture { query.beforeDate = modelVM.endDate }
+        if let bound = modelVM.effectiveEndBound { query.beforeDate = bound }   // DATE-02
         return AIAssistantScope(filteredQuery: query, selectedIDs: Array(selectedEmailIDs))
     }
 
