@@ -171,4 +171,38 @@ final class PipelinedImportTests: XCTestCase {
         XCTAssertEqual(ordinals2, Array(0..<2_400), "no gap and no repeat across the cancel / resume boundary")
         XCTAssertEqual(Set(sideStrings("SELECT message_id FROM emails;", in: storeDir2)), ids)
     }
+
+    /// The rollback switch: `overlapBatches = false` is the sequential schedule
+    /// of before, and both schedules store exactly the same rows, ordinals and
+    /// byte locators from the same file.
+    func testOverlapOnAndOff_storeTheSameRowsOrdinalsAndLocators() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("parity-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (mbox, ids) = try writeMBOX(messages: 1_100, at: root)
+        var rows: [Bool: Set<String>] = [:]
+        for overlap in [true, false] {
+            let dir = root.appendingPathComponent(overlap ? "on" : "off", isDirectory: true)
+            let store = SQLiteEmailStore(directory: dir.appendingPathComponent("store", isDirectory: true))
+            let fts = FTSSearchIndex(shardsDirectory: dir.appendingPathComponent("fts", isDirectory: true))
+            let coordinator = await BulkImportCoordinator(store: store, fts: fts, checkpoints: ImportCheckpointStore(store: store),
+                                                          requiresStorageActivation: false)
+            var options = BulkImportCoordinator.Options()
+            options.enforceStoragePreflight = false
+            options.useOffsetEngine = true
+            options.recordLocators = true
+            options.adaptiveBatching = false
+            options.batchSize = 150
+            options.overlapBatches = overlap
+            let summary = try await coordinator.runImport(urls: [mbox], options: options)
+            XCTAssertEqual(summary.parsed, 1_100, "overlap \(overlap)")
+            let joined = sideStrings("""
+                SELECT e.message_id || '|' || e.source_ordinal || '|' || l.msg_offset || '|' || l.msg_length || '|' || l.body_offset || '|' || l.body_length
+                FROM emails e JOIN message_locators l ON l.email_id = e.id;
+                """, in: dir.appendingPathComponent("store", isDirectory: true))
+            XCTAssertEqual(joined.count, 1_100, "every row has its locator (overlap \(overlap))")
+            rows[overlap] = Set(joined)
+        }
+        XCTAssertEqual(rows[true], rows[false], "both schedules produce the same rows, ordinals and locators")
+        XCTAssertEqual(Set(rows[true]!.map { String($0.split(separator: "|")[0]) }), ids)
+    }
 }

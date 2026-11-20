@@ -604,6 +604,19 @@ struct ParsedEmailListView: View {
                         .padding(.vertical, 2)
                         .background(AppColors.primary)
                         .clipShape(Capsule())
+                    // PERF-02: the page is shown before the exact total is counted.
+                    if model.isCountingTotal {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .accessibilityLabel(Text("Counting archived messages…"))
+                    } else if model.totalCountFailed {
+                        Button(String(localized: "Retry")) {
+                            Task { await model.retryTotalCount() }
+                        }
+                        .controlSize(.mini)
+                        .accessibilityLabel(Text("Retry"))
+                        .accessibilityHint(Text("Counting archived messages…"))
+                    }
                 }
 
                 Spacer()

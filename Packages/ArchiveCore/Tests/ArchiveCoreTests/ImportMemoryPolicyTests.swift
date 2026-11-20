@@ -167,4 +167,25 @@ final class ImportMemoryPolicyTests: XCTestCase {
         let afterFailure = await store.activeBudget
         XCTAssertEqual(afterFailure, SQLiteEmailStore.interactiveBudget, "failed: interactive budget back")
     }
+
+    // MARK: - PERF-04: a repeated outcome is not new evidence
+
+    /// With one batch parsed ahead the controller can be asked again before
+    /// a new commit finished. The same outcome (same sequence) seen again
+    /// must not count towards growth; fresh sequences still do.
+    func testRepeatedOutcome_doesNotGrowTheBatch_freshOutcomesDo() async {
+        let controller = AdaptiveBatchController(physicalMemory: 16 * 1_024 * mib)
+        let start = await controller.envelope
+        let repeated = BatchOutcome(messages: 256, bytes: 1_024, commitSeconds: 0.1, sequence: 7)
+        for _ in 0..<20 {
+            let decision = await controller.next(after: repeated, sample: healthy())
+            XCTAssertEqual(decision.envelope, start, "the same committed batch reported again is not a healthy trend")
+        }
+        for n in 1...20 {
+            _ = await controller.next(after: BatchOutcome(messages: 256, bytes: 1_024, commitSeconds: 0.1, sequence: 100 + n),
+                                      sample: healthy())
+        }
+        let grown = await controller.envelope
+        XCTAssertGreaterThan(grown.maxMessages, start.maxMessages, "twenty distinct healthy commits grow the batch")
+    }
 }

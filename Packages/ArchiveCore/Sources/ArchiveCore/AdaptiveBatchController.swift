@@ -96,6 +96,11 @@ struct BatchOutcome: Sendable, Equatable {
     var messages: Int
     var bytes: Int
     var commitSeconds: Double
+    /// PERF-04: the committed batch this outcome belongs to (monotonic). With
+    /// one batch parsed ahead, the controller can be asked again before a new
+    /// commit has finished; an outcome it has already consumed must not count
+    /// as fresh evidence for growth. nil = unknown (older callers, tests).
+    var sequence: Int? = nil
 }
 
 // MARK: - Decision
@@ -238,6 +243,8 @@ actor AdaptiveBatchController {
 
     private(set) var envelope: BatchEnvelope
     private let limits: Limits
+    /// The last outcome sequence consumed (see `BatchOutcome.sequence`).
+    private var lastOutcomeSequence: Int?
     /// Slow storage alone must not repeatedly halve batches to eight messages.
     /// Real pressure can still shrink below this latency-only floor.
     private let latencyFloor: BatchEnvelope
@@ -264,7 +271,13 @@ actor AdaptiveBatchController {
 
     /// The next decision. Call once per batch boundary with the previous
     /// batch's cost (nil for the first) and a fresh sample.
-    func next(after outcome: BatchOutcome?, sample: PressureSample) -> BatchDecision {
+    func next(after reported: BatchOutcome?, sample: PressureSample) -> BatchDecision {
+        // PERF-04: an outcome already consumed (same sequence) is no new
+        // evidence — a lookahead sample without a fresh commit can shrink on
+        // pressure but never grow the batch.
+        let stale = reported?.sequence != nil && reported?.sequence == lastOutcomeSequence
+        if let sequence = reported?.sequence { lastOutcomeSequence = sequence }
+        let outcome = stale ? nil : reported
         // 1. Hard stops first: these are not throttles, they are refusals.
         if let stop = hardStop(sample) {
             if !paused {
@@ -314,7 +327,12 @@ actor AdaptiveBatchController {
             return .proceed(envelope)
         }
 
-        // 3. Grow only on a sustained healthy trend, and gently.
+        // 3. Grow only on a sustained healthy trend, and gently — and only
+        // on samples that carry a new commit's outcome.
+        if stale {
+            record(.held, cause: "no new commit since the last sample")
+            return .proceed(envelope)
+        }
         consecutiveHealthy += 1
         if consecutiveHealthy >= limits.healthyBatchesBeforeGrowth,
            envelope != limits.ceiling {

@@ -113,6 +113,11 @@ final class BulkImportCoordinator {
         /// hard limits. The fixed `batchSize` survives as a troubleshooting
         /// override, which is what turning this off selects.
         var adaptiveBatching: Bool = true
+        /// PERF-04 (2026-11-19): parse the next batch while the store commits
+        /// the current one (`PipelinedBatchSink`, one write in flight). Off =
+        /// the sequential schedule of before — the rollback switch (rule 14)
+        /// and the A/B control for the throughput measurement.
+        var overlapBatches: Bool = true
         /// Used for sent/received classification during parsing (1a).
         var senderEmail: String = ""
         /// Free-tier cap: stop persisting once this many emails have been
@@ -824,7 +829,8 @@ final class BulkImportCoordinator {
                             messages: pending.count,
                             bytes: batchBytes,
                             commitSeconds: Double(commitElapsed.seconds)
-                                + Double(commitElapsed.attoseconds) / 1e18
+                                + Double(commitElapsed.attoseconds) / 1e18,
+                            sequence: summary.persistAttempted + pending.count   // monotonic per committed batch
                         )
                         summary.persistAttempted += pending.count
                         summary.blockedByTombstone += insertResult.blockedByTombstoneIDs.count
@@ -952,7 +958,7 @@ final class BulkImportCoordinator {
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
                         // PERF-04: the parser prepares the next batch while this one commits.
-                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
+                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]>(synchronous: !options.overlapBatches) { imported in
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
                                 for item in imported {
@@ -994,7 +1000,7 @@ final class BulkImportCoordinator {
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
                         // PERF-04: the parser prepares the next batch while this one commits.
-                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
+                        let batchSink = PipelinedBatchSink<[OffsetImportEngine.Imported]>(synchronous: !options.overlapBatches) { imported in
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
                                 for item in imported {
@@ -1029,7 +1035,7 @@ final class BulkImportCoordinator {
                             callbacks.onFileProgress?(sourceName, fileIndex, urls.count, prog)
                         }
                         // PERF-04: the parser prepares the next batch while this one commits.
-                        let batchSink = PipelinedBatchSink<[MBOXParser.RawEmail]> { batch in
+                        let batchSink = PipelinedBatchSink<[MBOXParser.RawEmail]>(synchronous: !options.overlapBatches) { batch in
                             // Locators belong to the batch that set them (the large-message route below).
                             batchLocators.removeAll(keepingCapacity: true)
                             try await persistBatch(batch)
@@ -1037,7 +1043,7 @@ final class BulkImportCoordinator {
                         // The two sinks share one writer: a large-message batch
                         // waits for the ordinary batch in flight, and vice versa,
                         // so the file's order is kept across both routes.
-                        let largeSink = PipelinedBatchSink<[OffsetImportEngine.Imported]> { imported in
+                        let largeSink = PipelinedBatchSink<[OffsetImportEngine.Imported]>(synchronous: !options.overlapBatches) { imported in
                             try await batchSink.drain()
                             batchLocators.removeAll(keepingCapacity: true)
                             if options.recordLocators {
@@ -1490,16 +1496,27 @@ final class PipelinedBatchSink<Input: Sendable>: @unchecked Sendable {
     /// `MainActorSink`'s did; the box only states that to the compiler.
     private struct Body: @unchecked Sendable { let run: (Input) async throws -> Void }
     private let body: Body
+    /// `Options.overlapBatches == false`: the write runs inline and `send`
+    /// returns when it is committed — the schedule of before, for rollback
+    /// and for the A/B measurement.
+    private let synchronous: Bool
     /// The write in flight. Touched by the parser's task and, in the
     /// container route, by the other sink's body, so it sits under a lock.
     private let inFlight = OSAllocatedUnfairLock<Task<Void, Error>?>(initialState: nil)
 
-    init(_ body: @escaping (Input) async throws -> Void) { self.body = Body(run: body) }
+    init(synchronous: Bool = false, _ body: @escaping (Input) async throws -> Void) {
+        self.synchronous = synchronous
+        self.body = Body(run: body)
+    }
 
     /// Waits for the previous write, then starts this one and returns.
     func send(_ input: Input) async throws {
         try await drain()
         try Task.checkCancellation()
+        if synchronous {
+            try await body.run(input)
+            return
+        }
         let body = self.body
         let task = Task { try await body.run(input) }
         inFlight.withLock { $0 = task }

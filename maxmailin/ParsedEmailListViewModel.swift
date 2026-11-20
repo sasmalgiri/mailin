@@ -407,6 +407,20 @@ class ParsedEmailListViewModel: ObservableObject {
     /// ("500 of 526"); nil when everything is reachable.
     var accessLimitedTotal: Int? { pager.isAccessLimited ? pager.totalCount : nil }
 
+    /// PERF-02: the first page is on screen while the exact total is still
+    /// being counted (the header shows the rows so far and a spinner).
+    var isCountingTotal: Bool { showParsedList && !pager.totalsKnown && !pager.totalsFailed }
+    /// The count query failed; the header offers a retry.
+    var totalCountFailed: Bool { showParsedList && pager.totalsFailed }
+
+    /// Runs the count again after a failure and republishes what depends on it.
+    func retryTotalCount() async {
+        await pager.retryTotals()
+        queryTotalCount = pager.totalCount
+        await refreshModelSearchNotice()
+        applyFilters()
+    }
+
     /// §13.1: the current filter state compiled onto the full archive query —
     /// operator syntax (from:/to:/has:attachment/…) via ArchiveQueryCompiler
     /// plus the structured UI filter state. This is the same mapping the AI

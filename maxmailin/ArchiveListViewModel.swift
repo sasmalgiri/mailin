@@ -131,6 +131,9 @@ final class ArchiveListViewModel: ObservableObject {
     /// PERF-02 (2026-11-19): the first page is published before the exact
     /// counts run, so a reader must not take 0 for "no rows" until this is set.
     @Published private(set) var totalsKnown = false
+    /// The count queries failed for the current query (the page is still
+    /// on screen); `retryTotals()` runs them again.
+    @Published private(set) var totalsFailed = false
     private var totalsTask: Task<Void, Never>?
 
     /// Load (or reload) from the first page for the current query.
@@ -155,6 +158,7 @@ final class ArchiveListViewModel: ObservableObject {
         error = nil
         isLoading = true
         totalsKnown = false
+        totalsFailed = false
         do {
             let fetched = try await fetchPage(startingAt: nil)
             guard revision == queryRevision else { return }
@@ -198,9 +202,12 @@ final class ArchiveListViewModel: ObservableObject {
             totalCount = count
             reachableCount = reachable
             totalsKnown = true
+            totalsFailed = false
             LaunchTiming.totalsKnown(archiveCount: count)
         } catch {
             guard revision == queryRevision, !Task.isCancelled else { return }
+            // The page stays; the header offers a retry for the count.
+            totalsFailed = true
             self.error = error
         }
     }
@@ -208,6 +215,20 @@ final class ArchiveListViewModel: ObservableObject {
     /// Waits until the current query's counts are in (or the load failed).
     func totalsSettled() async {
         await totalsTask?.value
+    }
+
+    /// Runs the count queries again for the current query (after a failure).
+    func retryTotals() async {
+        guard !totalsKnown else { return }
+        let revision = queryRevision
+        totalsFailed = false
+        error = nil
+        let task = Task { @MainActor [weak self] () -> Void in
+            guard let self else { return }
+            await self.loadTotals(revision: revision)
+        }
+        totalsTask = task
+        await task.value
     }
 
     /// Load the page after the window's tail; drop the head if over the window.
@@ -347,6 +368,7 @@ final class ArchiveListViewModel: ObservableObject {
         error = nil
         totalCount = 0
         totalsKnown = false
+        totalsFailed = false
         totalsTask?.cancel()
         totalsTask = nil
     }

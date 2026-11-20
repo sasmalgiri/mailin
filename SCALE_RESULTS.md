@@ -541,3 +541,26 @@ The mbox footprint growth doubled (two batches resident with the one-ahead pipel
 the adaptive budget) and stays far inside the 4 GiB soft budget. Store and FTS sizes unchanged (701.7 / 294.9 MB).
 Not yet in these rows: first-visible time (app only), attachment indexing to completion, 1 GB, attachment-heavy,
 OST, existing-archive import — PERF-00 owes them.
+
+## 2026-11-20 — PERF-05: the quiet baseline (Release, e918bb0, Mac otherwise idle, 06:37–07:43 IST)
+
+The same matrix as the two runs above, on the pre-optimisation worktree, with nothing else running on the Mac
+(only a background download). This is the honest "before"; the 2026-11-19 baseline rows were inflated by
+concurrent builds and tests and must not be used for a comparison.
+
+| Source | Before, quiet (e918bb0) | After (10732b1, 2026-11-19 19:36, near-quiet) | Change | Before, loaded (for the record) |
+|---|---|---|---|---|
+| mbox (real, mboxrd), 213.5 MB, 56,699 | **598.4 s** | 567.3 s | −5 % | 768.4 s |
+| eml folder tree, 210.2 MB | **1,148.8 s** | 1,045.1 s | −9 % | 1,611.6 s |
+| zip of the tree, 102.1 MB | **1,291.2 s** | 852.2 s | −34 % | 1,315.1 s |
+| pst (mailin writer), 763.9 MB | **730.7 s** | 679.2 s | −7 % | 771.7 s |
+
+Every row of every run reconciles (56,699 = 56,699, FTS rows equal, 118/118 folders, exports verified complete).
+Exports/verify unchanged within noise (mbox 17.8 / eml 16.2 / pst 34.0 s; verify 40.2 / 36.1 s). Footprint growth
+before/after: mbox 55 → 103 MB, eml 170 → 132 MB, zip 0 → 0, pst 56 → 58 MB.
+
+**Reading:** on this corpus (small text messages, no attachments to extract) the engine-level gain of PERF-01…04 is
+modest for mbox / eml / pst (5–9 %) and large for the zip container (34 %, where decompression + parse now overlaps
+the write). The dominating cost remains the store and the two search indexes per message. Single runs each; the
+instruction's "repeat at least three times, alternate order" is still owed and is done cheaply with
+`ImportThroughputTests` (`MAILIN_IMPORT_SCHEDULE=both`, same binary, mbox only) rather than the 65-minute matrix.

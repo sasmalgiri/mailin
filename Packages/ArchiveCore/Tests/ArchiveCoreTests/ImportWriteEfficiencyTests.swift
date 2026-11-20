@@ -163,4 +163,19 @@ final class ImportWriteEfficiencyTests: XCTestCase {
         let texts = try await third.chunkTextsForTesting(emailID: late, kind: "body")
         XCTAssertEqual(texts, ["late rewritten"])
     }
+
+    /// A lookup that cannot run must fail the batch, never import past the
+    /// check: deleted mail must not come back because the probe broke.
+    func testTombstoneLookupError_failsTheBatchClosed() async throws {
+        let store = SQLiteEmailStore(directory: storeDir)
+        try await store.insertBatch(try emails(0..<1, prefix: "warm"), batchSize: 10)
+        sideSQL("DROP TABLE deletion_tombstones;")
+        var threw = false
+        do {
+            _ = try await store.insertBatch(try emails(0..<5, prefix: "closed"), sourceFileHash: nil, accountID: nil, sourceID: nil,
+                                            firstOrdinal: nil, dedupPolicy: .messageID, batchSize: 50, progress: nil)
+        } catch { threw = true }
+        XCTAssertTrue(threw, "the batch fails when the tombstone probe cannot run")
+        XCTAssertEqual(sideCount("SELECT COUNT(*) FROM emails WHERE message_id LIKE '<closed%';"), 0, "nothing was imported past the broken check")
+    }
 }

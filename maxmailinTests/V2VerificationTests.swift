@@ -2611,7 +2611,12 @@ actor GatedRepository: EmailRepository {
     /// while the first page is already out.
     private var gateCounts = false
     func setGateCounts(_ on: Bool) { gateCounts = on }
+    /// PERF-02: a count that fails once, so the retry path is observable.
+    private var failCounts = false
+    func setFailCounts(_ on: Bool) { failCounts = on }
+    struct CountFailed: Error {}
     func count(query: EmailQuery) async throws -> Int {
+        if failCounts { throw CountFailed() }
         if gateCounts {
             await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
                 gates.append(c); _pending += 1
@@ -2701,6 +2706,30 @@ final class FirstPageBeforeTotalsTests: XCTestCase {
         await vm.totalsSettled()
         XCTAssertTrue(vm.totalsKnown)
         XCTAssertEqual(vm.totalCount, 1, "only the current query's total is applied")
+    }
+
+    /// A failed count leaves the page on screen, says so, and a retry counts again.
+    func testFailedTotals_leaveThePage_andRetryCountsAgain() async throws {
+        let mock = GatedRepository()
+        let rows = (0..<4).map { summary("R\($0)", at: TimeInterval(1_000 - $0)) }
+        await mock.setDatasets(["__all__": rows])
+        await mock.setFailCounts(true)
+        let vm = ArchiveListViewModel(archive: ArchiveDataService(repository: mock), pageSize: 10, maxRetained: 100)
+        let load = Task { await vm.loadInitial() }
+        await waitUntil { await mock.pending == 1 }
+        await mock.release()
+        _ = await load.value
+        XCTAssertEqual(vm.summaries.count, 4, "the page stays on screen")
+        XCTAssertFalse(vm.totalsKnown)
+        XCTAssertTrue(vm.totalsFailed, "the header can offer a retry")
+        XCTAssertNotNil(vm.error)
+
+        await mock.setFailCounts(false)
+        await vm.retryTotals()
+        XCTAssertTrue(vm.totalsKnown)
+        XCTAssertFalse(vm.totalsFailed)
+        XCTAssertNil(vm.error)
+        XCTAssertEqual(vm.totalCount, 4)
     }
 
     /// The default call still returns with the totals in, so every existing
