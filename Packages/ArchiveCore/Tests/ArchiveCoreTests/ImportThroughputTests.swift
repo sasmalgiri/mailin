@@ -22,7 +22,8 @@
 //    MAILIN_IMPORT_SCHEDULE=both \
 //    xcrun swift test -c release --package-path Packages/ArchiveCore --filter ImportThroughputTests
 //
-//  MAILIN_IMPORT_SCHEDULE = sequential | pipelined | both (default) | streaming | all.
+//  MAILIN_IMPORT_SCHEDULE = sequential | pipelined | both (default) | streaming | all, or an ordered
+//  comma list such as "pipelined,sequential" to alternate the run order.
 //  Without MAILIN_SCALE_FILE the real Enron mbox of the gate-2 corpus is used
 //  when present. Alternate the order and repeat at least three times before
 //  reading a difference as a speed-up: the OS file cache favours the second run.
@@ -59,12 +60,18 @@ final class ImportThroughputTests: XCTestCase {
     }
 
     private static var schedules: [Schedule] {
-        switch (ProcessInfo.processInfo.environment["MAILIN_IMPORT_SCHEDULE"] ?? "both").lowercased() {
+        let raw = (ProcessInfo.processInfo.environment["MAILIN_IMPORT_SCHEDULE"] ?? "both").lowercased()
+        switch raw {
         case "sequential": return [.sequential]
         case "pipelined": return [.pipelined]
         case "streaming": return [.streaming]
         case "all": return [.sequential, .pipelined, .streaming]
-        default: return [.sequential, .pipelined]
+        case "both": return [.sequential, .pipelined]
+        default:
+            // An explicit, ordered list ("pipelined,sequential") so the run
+            // order can be alternated against the OS file cache.
+            let listed = raw.split(separator: ",").compactMap { Schedule(rawValue: $0.trimmingCharacters(in: .whitespaces)) }
+            return listed.isEmpty ? [.sequential, .pipelined] : listed
         }
     }
 
