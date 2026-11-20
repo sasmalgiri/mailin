@@ -24,6 +24,8 @@
 //
 //  MAILIN_IMPORT_SCHEDULE = sequential | pipelined | both (default) | streaming | all, or an ordered
 //  comma list such as "pipelined,sequential" to alternate the run order.
+//  MAILIN_SCALE_PRELOAD=/path/other.mbox imports that file first (untimed) so the
+//  fixture is timed into an existing, already large archive.
 //  Without MAILIN_SCALE_FILE the real Enron mbox of the gate-2 corpus is used
 //  when present. Alternate the order and repeat at least three times before
 //  reading a difference as a speed-up: the OS file cache favours the second run.
@@ -114,6 +116,19 @@ final class ImportThroughputTests: XCTestCase {
             options.recordLocators = schedule != .streaming
             options.overlapBatches = schedule == .pipelined
 
+            // MAILIN_SCALE_PRELOAD: an archive that is already large — the
+            // preload is imported first, untimed, then the fixture is timed
+            // into that existing archive.
+            if let preload = ProcessInfo.processInfo.environment["MAILIN_SCALE_PRELOAD"], !preload.isEmpty {
+                let url = URL(fileURLWithPath: preload)
+                let t0 = ContinuousClock().now
+                let pre = try await coordinator.runImport(urls: [url], options: options)
+                let preStored = try await store.totalCount()
+                print(String(format: "PRELOAD schedule=\"%@\" file=%@ messages=%d stored=%d seconds=%.1f", schedule.label, url.lastPathComponent,
+                             pre.parsed, preStored, Self.seconds(t0.duration(to: ContinuousClock().now))))
+            }
+            let preloaded = try await store.totalCount()
+
             let clock = ContinuousClock()
             let sampler = PeakSampler()
             await sampler.start()
@@ -138,8 +153,8 @@ final class ImportThroughputTests: XCTestCase {
 
             let seconds = Self.seconds(start.duration(to: end))
             let firstCommitSeconds = firstCommit.at.map { Self.seconds(start.duration(to: $0)) }
-            let stored = try await store.totalCount()
-            let indexed = try await fts.rowCount()
+            let stored = try await store.totalCount() - preloaded
+            let indexed = try await fts.rowCount() - preloaded
             let peak = await sampler.peak, base = await sampler.baseline
             let mib = Double(bytes) / 1_048_576
             print(String(format: "THROUGHPUT configuration=%@ schedule=\"%@\" file=%@ bytes=%lld messages=%d indexed=%d seconds=%.1f msgs_per_s=%.1f MiB_per_s=%.2f first_commit_s=%@ batches=%d peak_footprint_MB=%.0f baseline_footprint_MB=%.0f damaged=%d persist_failed=%d",
