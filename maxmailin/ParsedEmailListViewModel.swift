@@ -811,6 +811,8 @@ class ParsedEmailListViewModel: ObservableObject {
         await pager.totalsSettled()
         guard revision == windowRevision else { return }
         queryTotalCount = pager.totalCount
+        await refreshQueryDateSpan(compiled, revision: revision)
+        guard revision == windowRevision else { return }
         await refreshModelSearchNotice()
         // The notice and the header count are published by the refinement pass.
         applyFilters()
@@ -849,6 +851,8 @@ class ParsedEmailListViewModel: ObservableObject {
         await pager.totalsSettled()
         guard revision == windowRevision else { return }
         queryTotalCount = pager.totalCount
+        await refreshQueryDateSpan(compiled, revision: revision)
+        guard revision == windowRevision else { return }
         await refreshModelSearchNotice()
         // The notice and the header count are published by the refinement pass.
         applyFilters()
@@ -1761,10 +1765,26 @@ class ParsedEmailListViewModel: ObservableObject {
     var allTags: [String] {
         Array(Set(residentEmailsInPlace.flatMap { $0.tags })).sorted()
     }
-    /// Date span of the visible (window-backed) list.
+    /// LIST-01 (owner report 2026-11-20): the first and last date of the whole
+    /// list — what the query lists in the store, the same rows the header
+    /// counts — not of the loaded page window (which showed "29 Jan 2002 – 29
+    /// Dec 2005" over 56,699 emails reaching back to 1980). With an in-window
+    /// refinement the visible rows are the list, so their own span is used.
     var filteredDateRange: (Date?, Date?) {
+        if visibleEmails.count == residentEmails.count {
+            return (queryDateSpan.first, queryDateSpan.last)
+        }
         let dates = visibleEmails.compactMap { isoFormatter.date(from: $0.timestamp) }
         return (dates.min(), dates.max())
+    }
+
+    /// LIST-01: the store's date span for the current paged query.
+    @Published private(set) var queryDateSpan: (first: Date?, last: Date?) = (nil, nil)
+
+    private func refreshQueryDateSpan(_ query: EmailQuery, revision: UInt64) async {
+        let span = (try? await archive.dateSpan(query: query)) ?? (nil, nil)
+        guard revision == windowRevision else { return }
+        queryDateSpan = span
     }
 
     /// For sidebar: returns senders sorted by their email count descending

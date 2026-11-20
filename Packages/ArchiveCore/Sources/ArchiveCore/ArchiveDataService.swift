@@ -58,6 +58,12 @@ final class ArchiveDataService {
         try await repository.count(query: scoped(query))
     }
 
+    /// LIST-01: first and last date of everything the query lists (scoped as
+    /// the list is), computed by the store — not from the loaded page window.
+    func dateSpan(query: EmailQuery = .all) async throws -> (first: Date?, last: Date?) {
+        try await repository.dateSpan(query: scoped(query))
+    }
+
     /// The count WITHOUT the tier's scope — what the archive holds in total,
     /// for the Free banners that say "first 500 of 526" and "26 more with
     /// Personal". Never used to fetch rows.

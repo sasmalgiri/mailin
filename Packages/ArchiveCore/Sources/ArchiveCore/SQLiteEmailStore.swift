@@ -4331,6 +4331,49 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    /// LIST-01: first and last date (unix seconds) of what a non-text query
+    /// lists — the rows `count` counts: the filter clauses when the query has
+    /// structured filters, otherwise the date bounds over untrashed mail.
+    func dateSpanSeconds(_ query: EmailQuery) throws -> (min: Int64?, max: Int64?) {
+        let db = try ensureDB()
+        let (filterSQL, binds) = Self.filterClauses(query)
+        var clauses = filterSQL
+        if !query.hasStructuredFilters { clauses.append(Self.notTrashedPredicate) }
+        let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
+        let stmt = try prepare(db, "SELECT MIN(e.date), MAX(e.date) FROM emails e WHERE \(whereSQL);")
+        defer { sqlite3_finalize(stmt) }
+        _ = bindQueryValues(stmt, binds, startingAt: 1)
+        guard try stepRow(stmt, db) else { return (nil, nil) }
+        let lo = sqlite3_column_type(stmt, 0) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 0)
+        let hi = sqlite3_column_type(stmt, 1) == SQLITE_NULL ? nil : sqlite3_column_int64(stmt, 1)
+        return (lo, hi)
+    }
+
+    /// LIST-01: first and last date among `candidates` that satisfy the
+    /// query's non-text filters (the text-search case).
+    func dateSpanSeconds(among candidates: [UUID], query: EmailQuery) throws -> (min: Int64?, max: Int64?) {
+        guard !candidates.isEmpty else { return (nil, nil) }
+        let db = try ensureDB()
+        let (clauses, binds) = Self.filterClauses(query)
+        var lo: Int64?
+        var hi: Int64?
+        for chunk in candidates.chunked(into: 500) {
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            var whereSQL = "e.id IN (\(placeholders))"
+            if !clauses.isEmpty { whereSQL += " AND " + clauses.joined(separator: " AND ") }
+            let stmt = try prepare(db, "SELECT MIN(e.date), MAX(e.date) FROM emails e WHERE \(whereSQL);")
+            defer { sqlite3_finalize(stmt) }
+            var idx: Int32 = 1
+            for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
+            _ = bindQueryValues(stmt, binds, startingAt: idx)
+            if try stepRow(stmt, db) {
+                if sqlite3_column_type(stmt, 0) != SQLITE_NULL { let m = sqlite3_column_int64(stmt, 0); lo = min(lo ?? m, m) }
+                if sqlite3_column_type(stmt, 1) != SQLITE_NULL { let m = sqlite3_column_int64(stmt, 1); hi = max(hi ?? m, m) }
+            }
+        }
+        return (lo, hi)
+    }
+
     /// Which of `candidates` satisfy the query's NON-TEXT filters — used to
     /// verify FTS candidates (text queries) and scope exclusions (§15) with
     /// one bounded IN query per chunk.

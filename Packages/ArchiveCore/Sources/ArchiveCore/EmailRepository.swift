@@ -219,6 +219,15 @@ protocol EmailRepository: Sendable {
     func exists(ids: [EmailID]) async throws -> Set<EmailID>
     func count(query: EmailQuery) async throws -> Int
     func delete(ids: [EmailID]) async throws
+    /// LIST-01 (owner report 2026-11-20): the first and last date of
+    /// everything the query lists — the same rows `count` counts, not the
+    /// page window. Nil when unknown or empty.
+    func dateSpan(query: EmailQuery) async throws -> (first: Date?, last: Date?)
+}
+
+extension EmailRepository {
+    /// Repositories without a store answer "unknown"; the UI then shows no range.
+    func dateSpan(query: EmailQuery) async throws -> (first: Date?, last: Date?) { (nil, nil) }
 }
 
 /// Production implementation over the current SwiftData `EmailStore` + FTS5.
@@ -361,6 +370,34 @@ struct EmailStoreRepository: EmailRepository {
             return try await sqlite.filteredCount(query)
         }
         return try await store.count(after: query.afterDate, before: query.beforeDate)
+    }
+
+    func dateSpan(query: EmailQuery) async throws -> (first: Date?, last: Date?) {
+        guard let sqlite = store as? SQLiteEmailStore else { return (nil, nil) }
+        func dates(_ span: (min: Int64?, max: Int64?)) -> (first: Date?, last: Date?) {
+            (span.min.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+             span.max.map { Date(timeIntervalSince1970: TimeInterval($0)) })
+        }
+        if let text = query.text, !text.isEmpty {
+            // The same hits `exactStreamedTextCount` counts, page by page.
+            let ftsQuery = FTSQueryBuilder.freeTextOrBoolean(text) ?? FTSQueryBuilder.escapeTerm(text)
+            let years = FTSSearchIndex.shardYears(after: query.afterDate, before: query.beforeDate)
+            var cursor: FTSSearchIndex.RankedCursor? = nil
+            var lo: Int64?
+            var hi: Int64?
+            while true {
+                let (hits, cont) = try await fts.searchRanked(ftsQuery, years: years, limit: 1_000, cursor: cursor)
+                if !hits.isEmpty {
+                    let span = try await sqlite.dateSpanSeconds(among: hits.map(\.id), query: query)
+                    if let m = span.min { lo = min(lo ?? m, m) }
+                    if let m = span.max { hi = max(hi ?? m, m) }
+                }
+                guard let next = cont else { break }
+                cursor = next
+            }
+            return dates((lo, hi))
+        }
+        return dates(try await sqlite.dateSpanSeconds(query))
     }
 
     private func exactStreamedTextCount(ftsQuery: String, query: EmailQuery) async throws -> Int {
