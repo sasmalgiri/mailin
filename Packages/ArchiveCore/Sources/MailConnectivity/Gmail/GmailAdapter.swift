@@ -86,8 +86,10 @@ public actor GmailAdapter: MailProviderAdapter {
     // MARK: Contract
 
     public func limits() async -> ProviderLimits {
-        ProviderLimits(maxConcurrentDownloads: options.maxConcurrentDownloads, pageSize: options.pageSize,
-                       changeTracking: .accountWide)
+        // FAST-05: more downloads at once when the fast mode is on.
+        ProviderLimits(maxConcurrentDownloads: ConnectedFastMode.downloads(normal: options.maxConcurrentDownloads,
+                                                                           ceiling: ConnectedFastMode.gmailCeiling),
+                       pageSize: options.pageSize, changeTracking: .accountWide)
     }
 
     /// Every label in one response (labels.list is not paged), plus All Mail.

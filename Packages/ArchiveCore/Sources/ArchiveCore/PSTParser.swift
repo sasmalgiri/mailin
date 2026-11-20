@@ -105,6 +105,38 @@ struct PSTParser {
             batchBytes = 0
             if let envelopeProvider { envelope = await envelopeProvider() }
         }
+        // FAST-02: the fast import decodes a window of items on several
+        // workers (the reader only reads once built), then appends them here
+        // in node order — the ordinals and checkpoints are those of before.
+        if let lanesProvider = ImportWorkerPolicy.fastReaders, nodes.count > 1 {
+            var start = 0
+            while start < nodes.count {
+                try Task.checkCancellation()
+                let lanes = max(1, lanesProvider())
+                let window = max(lanes, min(max(1, envelope.maxMessages), lanes * 8))
+                let end = min(nodes.count, start + window)
+                let decoded = await decodeInParallel(Array(nodes[start..<end]), spec: spec,
+                                                     senderEmail: senderEmail, lanes: lanes, deep: deep)
+                for item in decoded {
+                    guard let email = item.email else { continue }
+                    if deep, let key = item.carveKey, let subject = item.subject {
+                        carveKeys.insert(key)
+                        carveSubjects.insert(subject)
+                    }
+                    let bytes = email.rawSource.utf8.count
+                    if !batch.isEmpty, bytes > max(0, envelope.maxBytes - batchBytes) {
+                        try await flush()
+                    }
+                    batch.append(email)
+                    batchBytes += bytes
+                    if batch.count >= min(size, envelope.maxMessages) || batchBytes >= envelope.maxBytes {
+                        try await flush()
+                    }
+                }
+                onProgress?(Double(end) / Double(max(nodes.count, 1)) * (deep ? 0.9 : 1))
+                start = end
+            }
+        } else {
         for (index, node) in nodes.enumerated() {
             try Task.checkCancellation()
             let message: PSTReader.PSTMessage? = autoreleasepool { spec.message(for: node, folderCache: &folderCache) }
@@ -130,6 +162,7 @@ struct PSTParser {
             if index % 64 == 0 {
                 onProgress?(Double(index + 1) / Double(max(nodes.count, 1)) * (deep ? 0.9 : 1))
             }
+        }
         }
         try await flush()
         if deep, emitted > 0 {
@@ -195,6 +228,47 @@ struct PSTParser {
     }
 
     /// One read message as the archive's email record.
+    /// FAST-02: decodes `nodes` on `lanes` workers, results in node order.
+    /// Each worker has its own folder cache and date formatter; the reader is
+    /// only read after it is built.
+    private struct DecodedItem: Sendable {
+        let email: MBOXParser.RawEmail?
+        let carveKey: String?
+        let subject: String?
+    }
+    private static func decodeInParallel(_ nodes: [PSTSpecReader.Node], spec: PSTSpecReader,
+                                         senderEmail: String, lanes: Int, deep: Bool) async -> [DecodedItem] {
+        struct Shared: @unchecked Sendable { let spec: PSTSpecReader; let nodes: [PSTSpecReader.Node] }
+        let shared = Shared(spec: spec, nodes: nodes)
+        let lanes = max(1, min(lanes, nodes.count))
+        var out = [DecodedItem?](repeating: nil, count: nodes.count)
+        await withTaskGroup(of: [(Int, DecodedItem)].self) { group in
+            for lane in 0..<lanes {
+                group.addTask {
+                    var cache: [UInt32: String?] = [:]
+                    let iso = ISO8601DateFormatter()
+                    var part: [(Int, DecodedItem)] = []
+                    var index = lane
+                    while index < shared.nodes.count {
+                        let message = autoreleasepool { shared.spec.message(for: shared.nodes[index], folderCache: &cache) }
+                        if let message {
+                            part.append((index, DecodedItem(
+                                email: rawEmail(from: message, senderEmail: senderEmail, isoFormatter: iso),
+                                carveKey: deep ? PSTSpecReader.carveKey(message) : nil,
+                                subject: deep ? message.subject : nil)))
+                        } else {
+                            part.append((index, DecodedItem(email: nil, carveKey: nil, subject: nil)))
+                        }
+                        index += lanes
+                    }
+                    return part
+                }
+            }
+            for await part in group { for (index, item) in part { out[index] = item } }
+        }
+        return out.compactMap { $0 }
+    }
+
     static func rawEmail(from msg: PSTReader.PSTMessage, senderEmail: String, isoFormatter: ISO8601DateFormatter) -> MBOXParser.RawEmail {
             let from = msg.senderEmail.isEmpty ? msg.senderName : "\(msg.senderName) <\(msg.senderEmail)>"
             let timestamp = isoFormatter.string(from: msg.deliveryTime ?? msg.creationTime ?? .distantPast)

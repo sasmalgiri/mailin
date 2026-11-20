@@ -90,10 +90,11 @@ extension SQLiteEmailStore {
         let plain: Data?
     }
 
-    /// Runs the pass for every pending source. `workers` fingerprint hashes
-    /// run at the same time; `pageSize` rows are read, keyed and resolved per
-    /// step, so memory stays bounded whatever the archive size.
-    func runDeferredDeduplication(workers: Int, pageSize: Int = 2_000) async throws -> DeferredDeduplicationResult {
+    /// Runs the pass for every pending source. `workers` is asked before every
+    /// page how many fingerprint hashes may run at the same time; `pageSize`
+    /// rows are read, keyed and resolved per step, so memory stays bounded
+    /// whatever the archive size.
+    func runDeferredDeduplication(workers: @Sendable () -> Int, pageSize: Int = 2_000) async throws -> DeferredDeduplicationResult {
         var result = DeferredDeduplicationResult()
         let pending = try pendingDeferredDeduplication()
         guard !pending.isEmpty else { return result }
@@ -150,7 +151,7 @@ extension SQLiteEmailStore {
                 result.examined += page.count
 
                 // 2. Keys, the fingerprints on several workers.
-                let keys = await Self.dedupKeys(for: page, policy: policy, workers: workers)
+                let keys = await Self.dedupKeys(for: page, policy: policy, workers: max(1, workers()))
 
                 // 3. Resolve in import order: first holder keeps the key.
                 var plans: [UUID: [UUID]] = [:]

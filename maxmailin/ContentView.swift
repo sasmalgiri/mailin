@@ -3807,6 +3807,16 @@ struct ContentView: View {
                         .font(Typography.caption1)
                         .foregroundColor(viewModel.memoryUsageMB > 2000 ? AppColors.warning : AppColors.secondary)
                 }
+                if viewModel.isImportRunning {
+                    Button(role: .cancel) {
+                        viewModel.cancelImport()
+                    } label: {
+                        Text("Cancel import")
+                    }
+                    .help("Stops after the batch being saved. Everything saved so far is kept; import the file again to continue from there.")
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("import.progress.cancel")
+                }
             }
             .padding(Spacing.xLarge)
             .background(

@@ -544,6 +544,8 @@ final class BulkImportCoordinator {
             searchWriter = PipelinedBatchSink<SearchWrite> { [weak self] write in
                 guard let self else { return }
                 do {
+                    // FAST-02: the writer count follows the Mac, batch by batch.
+                    await self.fts.setParallelShardWriters(ImportWorkerPolicy.searchWriters())
                     try await self.retryingAfterVolumeLoss { try await self.fts.indexBatch(write.emails) }
                     self.searchWriterIndexed += write.emails.count
                     self.live.indexedThisRun = self.searchWriterIndexed
@@ -1169,8 +1171,12 @@ final class BulkImportCoordinator {
                         let cursorSink = MainActorSink<ContainerWalkCursor> { cursor in
                             await cursorStore.recordContainerCursor(cursor, identity: identity)
                         }
+                        // FAST-02: PST/OST items and ZIP members are decoded by
+                        // several workers, the count asked before every window.
+                        let fastReaders: (@Sendable () -> Int)? = options.fastImport ? ImportWorkerPolicy.readersNow : nil
                         do {
-                            fileReport = try await ParserFactory.parseStreamingCallback(
+                            fileReport = try await ImportWorkerPolicy.$fastReaders.withValue(fastReaders) {
+                              try await ParserFactory.parseStreamingCallback(
                                 fileURL: importURL,
                                 senderEmail: options.senderEmail,
                                 batchSize: batchSize,
@@ -1185,7 +1191,8 @@ final class BulkImportCoordinator {
                                     try await largeSink.drain()
                                     try await batchSink.send(batch)
                                 }
-                            )
+                              )
+                            }
                             try await largeSink.drain()
                             try await batchSink.drain()
                         } catch let error as ContainerWalkError {
@@ -1306,7 +1313,7 @@ final class BulkImportCoordinator {
                 summary.ftsFailedBatchCount += searchWriterFailedBatches
             }
             await MainActor.run { self.status = .indexing(processed: summary.persistAttempted, total: summary.persistAttempted) }
-            let pass = try await store.runDeferredDeduplication(workers: ImportWorkerPolicy.duplicatePassWorkers())
+            let pass = try await store.runDeferredDeduplication(workers: { ImportWorkerPolicy.duplicatePassWorkers() })
             lastDeferredDeduplication = pass
             deferredTrashed = pass.duplicatesTrashed + pass.previouslyDeletedTrashed
             summary.blockedByTombstone += pass.previouslyDeletedTrashed

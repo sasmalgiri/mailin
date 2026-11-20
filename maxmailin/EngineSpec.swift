@@ -91,6 +91,12 @@ struct EngineSpec: Sendable {
                 name: String(localized: "Search exclusions (3.0)"),
                 detail: String(localized: "Search can exclude as well as include: put - or NOT before any filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."))
 
+        case .v4FastImport:
+            return EngineSpec(.archive, maturity: .experimental,
+                name: String(localized: "Fast import"),
+                detail: String(localized: "Stores every message first, with readers and writers sized to this Mac, and writes the search index alongside. When the import ends, your Duplicates choice is applied: each duplicate is merged into the copy that is kept and moved to the Trash. A new, empty archive also gets its search index split by month. Also speeds up downloads from connected accounts."),
+                warning: String(localized: "Not yet tested on real archives. Duplicates go to the Trash after the import instead of being skipped, and the counts are final only when the duplicate pass ends."))
+
         // MARK: AI Insights (Page 2)
         case .v3AnalysisQueries:
             return EngineSpec(.aiInsights,

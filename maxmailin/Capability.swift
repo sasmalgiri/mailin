@@ -121,6 +121,11 @@ enum Capability: String, CaseIterable, Codable, Sendable, Identifiable {
     case v3SemanticSearch
     case v3Duplicates
     case v3SearchOperators
+    /// FAST-01…05 (owner decision 2026-11-20): store first with readers and
+    /// writers sized to the Mac, search index on its own writer, duplicates
+    /// applied after the import; month search shards for a new archive. Off
+    /// by default (experimental).
+    case v4FastImport
 
     // AI Insights (Page 2)
     case v3AnalysisQueries

@@ -64,7 +64,9 @@ public actor FairDownloadScheduler {
     public func peak() -> Int { peakInUse }
 
     private func canGrant(_ account: UUID, limit: Int) -> Bool {
-        inUse < totalSlots && (perAccount[account] ?? 0) < limit
+        // FAST-05: the shared ceiling follows the fast mode, decided at every grant.
+        inUse < ConnectedFastMode.downloads(normal: totalSlots, ceiling: ConnectedFastMode.totalCeiling)
+            && (perAccount[account] ?? 0) < limit
     }
 
     private func othersWaiting(than account: UUID) -> Bool {
@@ -82,7 +84,7 @@ public actor FairDownloadScheduler {
 
     private func dispatch() {
         var progressed = true
-        while progressed && inUse < totalSlots {
+        while progressed && inUse < ConnectedFastMode.downloads(normal: totalSlots, ceiling: ConnectedFastMode.totalCeiling) {
             progressed = false
             for account in rotation {
                 guard var queue = waiting[account], let head = queue.first, canGrant(account, limit: head.limit) else { continue }

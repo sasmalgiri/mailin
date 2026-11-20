@@ -111,11 +111,32 @@ actor ConnectedSearchFeed {
 
     func enqueue(_ id: UUID) async {
         pending.append(id)
-        if pending.count >= batchSize { await flush() }
+        guard pending.count >= batchSize else { return }
+        if ConnectedFastMode.isEnabled {
+            // FAST-05: the search write runs beside the downloads instead of
+            // inside the download that filled the batch (one writer at a time).
+            if backgroundFlush == nil {
+                backgroundFlush = Task { await self.runBackgroundFlushes() }
+            }
+        } else {
+            await flushPending()
+        }
     }
 
-    /// Indexes everything queued. Called after every run, stopped or not.
+    private var backgroundFlush: Task<Void, Never>?
+    private func runBackgroundFlushes() async {
+        while pending.count >= batchSize { await flushPending() }
+        backgroundFlush = nil
+    }
+
+    /// Indexes everything queued. Called after every run, stopped or not;
+    /// waits for a background search write still running (fast mode).
     func flush() async {
+        if let running = backgroundFlush { await running.value }
+        await flushPending()
+    }
+
+    private func flushPending() async {
         guard !pending.isEmpty else { return }
         let ids = pending
         pending.removeAll(keepingCapacity: true)

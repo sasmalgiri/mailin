@@ -42,7 +42,25 @@ class ContentViewModel: ObservableObject {
     var isCapabilityOn: (@MainActor (Capability) -> Bool)?
 
     private(set) var metadata: [String: Any] = [:]
-    private var isParsing = false
+    private var isParsing = false {
+        didSet { isImportRunning = isParsing }
+    }
+    /// True while a file import runs — the progress card shows Cancel then.
+    @Published private(set) var isImportRunning = false
+    /// The running import, so Cancel can stop it (owner 2026-11-20: the card had no Cancel).
+    private var importTask: Task<Void, Never>?
+    private var cancelPending = false
+
+    /// Stops the running import after the batch being saved: everything
+    /// committed so far stays, with its checkpoint, so importing the file
+    /// again continues from there. The cancelled path below reports it.
+    func cancelImport() {
+        guard isParsing else { return }
+        cancelPending = true
+        loadingText = String(localized: "Cancelling…")
+        importCoordinator.cancel()
+        importTask?.cancel()
+    }
     private var memoryMonitorTask: Task<Void, Never>?
     private var pendingTempDirs: [URL] = []
     private var memoryPressureSource: DispatchSourceMemoryPressure?
@@ -197,7 +215,8 @@ class ContentViewModel: ObservableObject {
                                           copiesOriginals: Bool,
                                           maxEmails: Int?,
                                           senderEmail: String,
-                                          useOffsetEngine: Bool) -> BulkImportCoordinator.Options {
+                                          useOffsetEngine: Bool,
+                                          fastImport: Bool = false) -> BulkImportCoordinator.Options {
         BulkImportCoordinator.Options(
             batchSize: 500,
             senderEmail: senderEmail,
@@ -209,15 +228,11 @@ class ContentViewModel: ObservableObject {
             // ceiling has, so they are recorded whenever the offset engine
             // runs. The `locatorReads` switch gates READS only (audit F02).
             recordLocators: useOffsetEngine,
-            // FAST (owner decision 2026-11-20): store first with dynamic readers
-            // and writers, then the duplicate pass. Off unless switched on with
-            //   defaults write com.ecosanskriti.mailin mailinFastImport -bool YES
-            // — no on-screen control yet; the import of before stays the default.
-            fastImport: UserDefaults.standard.bool(forKey: fastImportDefaultsKey)
+            // FAST (owner decision 2026-11-20): Settings ▸ module matrix ▸
+            // "Fast import" (`Capability.v4FastImport`, experimental, off by default).
+            fastImport: fastImport
         )
     }
-
-    nonisolated static let fastImportDefaultsKey = "mailinFastImport"
 
     /// `inputByteLimit`: the tier's cumulative input allowance (nil =
     /// unlimited). Checked here, at the service boundary, as well as by the
@@ -253,14 +268,16 @@ class ContentViewModel: ObservableObject {
         selectedFiles = urls
         loadingProgress = 0.0
         loadingText = "Initializing..."
+        cancelPending = false
         isParsing = true
         parseErrors = []
         duplicatesRemoved = 0
         startMemoryMonitoring()
         let forensicEnabled = UserDefaults.standard.bool(forKey: "forensicModeEnabled")
 
-        Task { @MainActor [weak self] in
+        importTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.importTask = nil }
 
             if let denial = await ImportAllowance.check(urls: urls, limitBytes: inputByteLimit).denial {
                 self.isParsing = false
@@ -287,7 +304,7 @@ class ContentViewModel: ObservableObject {
                 guard let self else { return }
                 let totalFiles = Double(max(1, count))
                 self.loadingProgress = (Double(idx) + prog) / totalFiles
-                self.loadingText = "Importing \(name): \(Int(prog * 100))%"
+                if !self.cancelPending { self.loadingText = "Importing \(name): \(Int(prog * 100))%" }
                 // A4: the run may take files out of order (queue reordering),
                 // so the file is found by name, not by position.
                 let fileURL = urls.first { $0.lastPathComponent == name }
@@ -329,7 +346,8 @@ class ContentViewModel: ObservableObject {
                                              copiesOriginals: copiesOriginals,
                                              maxEmails: maxEmails,
                                              senderEmail: self.senderEmail,
-                                             useOffsetEngine: useOffsetEngine)
+                                             useOffsetEngine: useOffsetEngine,
+                                             fastImport: self.isCapabilityOn?(.v4FastImport) ?? false)
 
             do {
                 let summary = try await self.importCoordinator.runImport(

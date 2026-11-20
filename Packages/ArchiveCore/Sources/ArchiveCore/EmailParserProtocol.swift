@@ -415,8 +415,78 @@ struct ParserFactory {
                                     categories: walk.categories, declaredFolders: walk.declaredFolders.sorted(),
                                     sawMail: walk.sawMail)
             }
+            // FAST-02 (fast import only): consecutive single-message members
+            // (.eml / .emlx) are kept aside in a window, parsed on several
+            // workers and handed on as shared batches in member order. The
+            // cursor is reported only after the whole window went through
+            // `onBatch`, and any other event flushes the window first — the
+            // cursor never runs ahead of what was emitted.
+            struct WindowMember { let copy: URL; let folder: String?; let path: [Int]; let names: [String] }
+            let fastLanes = ImportWorkerPolicy.fastReaders
+            let fastScratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("mailin-zipfast-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: fastScratch) }
+            var window: [WindowMember] = []
+            func flushWindow() async throws {
+                guard !window.isEmpty else { return }
+                let members = window
+                window.removeAll(keepingCapacity: true)
+                defer { for member in members { try? FileManager.default.removeItem(at: member.copy) } }
+                let lanes = max(1, min(fastLanes?() ?? 1, members.count))
+                let results = await Self.parseMembersInParallel(members.map(\.copy), lanes: lanes, senderEmail: senderEmail,
+                                                                retainAttachmentBytes: retainAttachmentBytes,
+                                                                materializeAttachments: materializeAttachments)
+                let limit = max(1, await envelopeProvider?().maxMessages ?? batchSize)
+                var batch: [MBOXParser.RawEmail] = []
+                var pendingError: Error?
+                for (member, result) in zip(members, results) {
+                    switch result {
+                    case .success(let parsedMember):
+                        batch += Self.stamp(parsedMember.emails, folder: member.folder)
+                        total += parsedMember.report.totalMessages
+                        parsed += parsedMember.report.successfullyParsed
+                        failed += parsedMember.report.failed
+                        for (key, count) in parsedMember.report.errorCategories { walk.categories[key, default: 0] += count }
+                        walk.declaredFolders.formUnion(parsedMember.report.declaredFolders)
+                    case .failure(let refusal as WholeMessageReadRefusal):
+                        walk.refuseMember(member.names.last ?? "", reason: WholeMessageReadLimit.memberReason,
+                                          detail: refusal.localizedDescription)
+                    case .failure(let error):
+                        pendingError = error
+                    }
+                    if pendingError != nil { break }
+                    if batch.count >= limit {
+                        emitted += batch.count
+                        try await onBatch(batch)
+                        batch.removeAll(keepingCapacity: true)
+                    }
+                }
+                if !batch.isEmpty {
+                    emitted += batch.count
+                    try await onBatch(batch)
+                }
+                // As the one-at-a-time path: what came before an error is kept, the error stops the file.
+                if let pendingError { throw pendingError }
+                quietSinceReport = 0
+                if let last = members.last { try await onContainerMemberFinished?(cursor(last.path, last.names)) }
+            }
             while let event = try walk.next() {
                 try Task.checkCancellation()
+                if fastLanes != nil, case .mailbox(let url, let folder, let path, let names) = event,
+                   largeMessages?.kind(of: url) == nil,
+                   ["eml", "emlx"].contains(url.pathExtension.lowercased()) {
+                    // Kept aside: the walk deletes its scratch copy at the next step.
+                    try FileManager.default.createDirectory(at: fastScratch, withIntermediateDirectories: true)
+                    let copy = fastScratch.appendingPathComponent("\(window.count)-\(url.lastPathComponent)")
+                    try? FileManager.default.removeItem(at: copy)
+                    try FileManager.default.copyItem(at: url, to: copy)
+                    window.append(WindowMember(copy: copy, folder: folder, path: path, names: names))
+                    let base = walk.topLevelFraction
+                    onProgress?(base)
+                    if window.count >= max(1, (fastLanes?() ?? 1) * 8) { try await flushWindow() }
+                    continue
+                }
+                try await flushWindow()
                 switch event {
                 case .finished(let path, let names, let nestedArchive):
                     // A cursor behind the truth is always safe (the ordinal
@@ -478,6 +548,7 @@ struct ParserFactory {
                     try await onContainerMemberFinished?(cursor(path, names))
                 }
             }
+            try await flushWindow()
             guard walk.sawMail else {
                 throw ExtractionError.unsupportedFormat(
                     reason: "\(classification.summary). No mailbox files were found inside it (\(walk.topLevelCount) member\(walk.topLevelCount == 1 ? "" : "s") examined).")
@@ -661,6 +732,45 @@ struct ParserFactory {
 
     /// FOLD-02: give every message of a directory member the mailbox the
     /// directory layout says it is in, unless its parser already did.
+    /// FAST-02: one ZIP member parsed on its own (the members of a window run
+    /// on several workers). Each member is a single file; its own parser runs
+    /// as in the one-at-a-time path, with its batches collected.
+    struct ParsedMember: Sendable {
+        let emails: [MBOXParser.RawEmail]
+        let report: MBOXParser.ParseRecoveryReport
+    }
+    static func parseMembersInParallel(_ urls: [URL], lanes: Int, senderEmail: String,
+                                       retainAttachmentBytes: Bool, materializeAttachments: Bool) async -> [Result<ParsedMember, Error>] {
+        var results = [Result<ParsedMember, Error>?](repeating: nil, count: urls.count)
+        let lanes = max(1, min(lanes, urls.count))
+        await withTaskGroup(of: [(Int, Result<ParsedMember, Error>)].self) { group in
+            for lane in 0..<lanes {
+                group.addTask {
+                    var part: [(Int, Result<ParsedMember, Error>)] = []
+                    var index = lane
+                    while index < urls.count {
+                        var emails: [MBOXParser.RawEmail] = []
+                        do {
+                            let report = try await parseStreamingCallback(
+                                fileURL: urls[index], senderEmail: senderEmail, batchSize: 1_000,
+                                retainAttachmentBytes: retainAttachmentBytes,
+                                materializeAttachments: materializeAttachments,
+                                nestedContainerAllowed: false,
+                                onBatch: { emails += $0 })
+                            part.append((index, .success(ParsedMember(emails: emails, report: report))))
+                        } catch {
+                            part.append((index, .failure(error)))
+                        }
+                        index += lanes
+                    }
+                    return part
+                }
+            }
+            for await part in group { for (index, result) in part { results[index] = result } }
+        }
+        return results.map { $0 ?? .failure(CancellationError()) }
+    }
+
     static func stamp(_ batch: [MBOXParser.RawEmail], folder: String?) -> [MBOXParser.RawEmail] {
         guard let folder, !folder.isEmpty else { return batch }
         return batch.map { email in

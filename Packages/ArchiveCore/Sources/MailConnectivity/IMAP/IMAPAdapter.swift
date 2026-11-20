@@ -313,8 +313,14 @@ public actor IMAPAdapter: MailProviderAdapter {
     }
 
     public func limits() async -> ProviderLimits {
-        ProviderLimits(maxConcurrentDownloads: configuration.maxConnections, pageSize: configuration.pageSize,
+        ProviderLimits(maxConcurrentDownloads: connectionLimit, pageSize: configuration.pageSize,
                        changeTracking: .perFolder)
+    }
+
+    /// FAST-05: connections this account may hold now — the configured number,
+    /// more when the fast mode is on (decided at every checkout).
+    private var connectionLimit: Int {
+        ConnectedFastMode.downloads(normal: configuration.maxConnections, ceiling: ConnectedFastMode.imapCeiling)
     }
 
     // MARK: Sessions
@@ -396,7 +402,7 @@ public actor IMAPAdapter: MailProviderAdapter {
                 open -= 1
                 continue
             }
-            if open < configuration.maxConnections {
+            if open < connectionLimit {
                 open += 1
                 do { return try await openSession(context) } catch {
                     open -= 1

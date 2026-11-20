@@ -1,4 +1,5 @@
 @testable import ArchiveCore
+import MailConnectivity
 //
 //  CapabilityWiring.swift
 //  mailin
@@ -135,6 +136,10 @@ enum CapabilityWiring {
             ArchiveRetrievalService.semanticFusionEnabled = isOn
         case .v3SearchOperators:
             ArchiveQueryCompiler.exclusionsEnabled = isOn
+        case .v4FastImport:
+            // FAST-05: file imports read the switch when they start; connected
+            // downloads read this flag at every download slot.
+            ConnectedFastMode.isEnabled = isOn
         case .v3PagedLists:
             SQLiteEmailStore.unboundedIDLookups = isOn
             V3Paging.isOn = isOn

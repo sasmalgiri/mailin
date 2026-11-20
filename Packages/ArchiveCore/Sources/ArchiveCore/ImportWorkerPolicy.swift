@@ -45,4 +45,12 @@ enum ImportWorkerPolicy {
     }
 
     static func duplicatePassWorkers() -> Int { readers() }
+
+    /// `readers()` as a value, for the task-local and the parser hooks.
+    static let readersNow: @Sendable () -> Int = { readers() }
+
+    /// FAST-02: set by the fast import around the parse of one source, read by
+    /// the PST/OST reader and the ZIP walk (which have no options parameter for
+    /// it). Nil — every other import — keeps their one-at-a-time reading.
+    @TaskLocal static var fastReaders: (@Sendable () -> Int)?
 }
