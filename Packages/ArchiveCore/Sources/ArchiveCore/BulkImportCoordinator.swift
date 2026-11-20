@@ -537,13 +537,9 @@ final class BulkImportCoordinator {
         if options.fastImport {
             let writers = ImportWorkerPolicy.searchWriters()
             await fts.setParallelShardWriters(writers)
-            // FAST-04: a new, empty index gets equal shards sized by this import.
-            let expectedBytes = urls.reduce(Int64(0)) { total, url in
-                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-                return total + size
-            }
-            if let count = try? await fts.adoptSizeShardsIfEmpty(expectedSourceBytes: expectedBytes, writers: writers) {
-                Self.logger.notice("Fast import: search index in \(count) size shards")
+            // FAST-04: a new, empty index gets year shards split into months.
+            if (try? await fts.adoptMonthShardsIfEmpty()) == true {
+                Self.logger.notice("Fast import: search index in month shards")
             }
             searchWriter = PipelinedBatchSink<SearchWrite> { [weak self] write in
                 guard let self else { return }
