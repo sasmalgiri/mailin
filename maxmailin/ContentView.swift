@@ -5050,9 +5050,17 @@ private func handleMultipleFiles(_ urls: [URL]) {
             // tombstone. Throws on storage failure: the archive is NOT
             // presented as empty when it is not.
             let outcome: ArchiveLifecycleService.ClearOutcome
+            // CLEAR-01: each step of the delete on the progress card.
             do {
-                outcome = try await ArchiveLifecycleService.shared.clearArchive()
+                outcome = try await ArchiveLifecycleService.shared.clearArchive(onStep: { [viewModel] step, fraction in
+                    viewModel.loadingText = step
+                    viewModel.loadingProgress = fraction
+                })
+                viewModel.loadingProgress = 0
+                viewModel.loadingText = ""
             } catch {
+                viewModel.loadingProgress = 0
+                viewModel.loadingText = ""
                 viewModel.statusMessage = "Clear failed: \(error.localizedDescription). Your emails were not removed."
                 viewModel.statusColor = .red
                 return

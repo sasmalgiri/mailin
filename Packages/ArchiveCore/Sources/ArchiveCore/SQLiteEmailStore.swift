@@ -6197,13 +6197,49 @@ actor SQLiteEmailStore: EmailArchiveStore {
     func clearAll() throws {
         let db = try ensureDB()
         try ensureEntityTable(db)
-        for table in ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
-                      "predictive_records", "near_dup_findings", "sources", "attachments",
-                      "email_participants", "email_tags", "email_domains",
-                      "email_review_state", "email_user_tags", "email_annotations",
-                      "attachment_search", "attachment_text_state", "deletion_tombstones",
-                      "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets", "entity_rows"] {
-            try exec(db, "DELETE FROM \(table);")
+        // Owner report 2026-11-20 ("delete takes a long time") — CLEAR-01:
+        //  • every per-message table goes, including the ones the clear used
+        //    to leave behind (the word-chunk search index and its documents,
+        //    the byte locators, folder memberships, recovery and custom values,
+        //    attachment children, source coverage, merge records, the
+        //    fast-import duplicate queue);
+        //  • FTS5 tables are dropped and created again from their own stored
+        //    definition — an FTS5 DELETE removes entries one by one;
+        //  • one transaction: all of it or none of it.
+        let required = ["emails", "email_bodies", "derived", "duplicates", "thread_keys",
+                        "predictive_records", "near_dup_findings", "sources", "attachments",
+                        "email_participants", "email_tags", "email_domains",
+                        "email_review_state", "email_user_tags", "email_annotations",
+                        "attachment_text_state", "deletion_tombstones",
+                        "features", "ioc_rows", "minhash_bands", "fingerprints", "fingerprint_buckets", "entity_rows"]
+        let alsoWhenPresent = ["search_docs", "message_locators", "part_locators", "source_coverage",
+                               "email_folders", "folders", "email_recovery", "email_custom_values",
+                               "attachment_children", "duplicate_merge_additions", "deferred_dedup_pending"]
+        let recreated = ["attachment_search", "search_chunks"]
+
+        var present = Set<String>()
+        var definitions: [String: String] = [:]
+        let list = try prepare(db, "SELECT name, sql FROM sqlite_master WHERE type = 'table';")
+        defer { sqlite3_finalize(list) }
+        while try stepRow(list, db) {
+            let name = columnText(list, 0)
+            present.insert(name)
+            if recreated.contains(name) { definitions[name] = columnText(list, 1) }
+        }
+
+        try exec(db, SQLiteHygiene.beginWrite)
+        do {
+            for table in required { try exec(db, "DELETE FROM \(table);") }
+            for table in alsoWhenPresent where present.contains(table) { try exec(db, "DELETE FROM \(table);") }
+            for table in recreated {
+                guard let sql = definitions[table], !sql.isEmpty else { continue }
+                try exec(db, "DROP TABLE \(table);")
+                try exec(db, sql + ";")
+            }
+            try exec(db, "COMMIT;")
+        } catch {
+            try? exec(db, "ROLLBACK;")
+            throw error
         }
     }
 

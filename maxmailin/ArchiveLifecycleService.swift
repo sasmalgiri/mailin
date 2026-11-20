@@ -61,9 +61,20 @@ final class ArchiveLifecycleService {
     /// Clear the archive. Legal holds (CustodianManager) are preserved unless
     /// `respectLegalHolds` is false. Throws on storage failure — the caller
     /// must NOT pretend the archive is empty when it is not.
+    /// CLEAR-01: stops a running file import and waits for it, so nothing is
+    /// written into the archive while (or after) it is cleared. Installed by
+    /// the main window's view model.
+    static var stopRunningImport: (@MainActor () async -> Void)?
+
     @discardableResult
-    func clearArchive(respectLegalHolds: Bool = true, auditTheClear: Bool = true) async throws -> ClearOutcome {
+    func clearArchive(respectLegalHolds: Bool = true, auditTheClear: Bool = true,
+                      onStep: (@MainActor (String, Double) -> Void)? = nil) async throws -> ClearOutcome {
         var outcome = ClearOutcome()
+        // 0. A running import stops first (after the batch being saved).
+        if let stop = Self.stopRunningImport {
+            onStep?(String(localized: "Stopping the import…"), 0.05)
+            await stop()
+        }
 
         // 1. Which rows survive (bounded user-curated set).
         var held: Set<UUID> = []
@@ -79,9 +90,12 @@ final class ArchiveLifecycleService {
             // Fast path. FTS FIRST (mirrors the repository's delete order):
             // a crash between the two leaves store rows the reconciler can
             // re-index — never ghost FTS rows over an empty store.
+            onStep?(String(localized: "Removing the search index…"), 0.2)
             try await fts.clear()
+            onStep?(String(localized: "Removing messages…"), 0.5)
             try await store.clearAll()
             outcome.deleted = totalBefore
+            onStep?(String(localized: "Finishing the delete…"), 0.8)
         } else {
             // Paged deletes; (date,id) keyset is delete-stable.
             var cursorDate: Date? = nil

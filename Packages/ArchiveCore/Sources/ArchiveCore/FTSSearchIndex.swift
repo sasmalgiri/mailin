@@ -893,24 +893,31 @@ actor FTSSearchIndex {
     /// full unlink, and the next insert re-uses the open handles).
     func clear() throws {
         try migrateLegacyIfNeeded()
-        let years = try discoverAllShardYears()
-        for year in years {
-            let db = try ensureShard(year: year)
-            // Reset the registry too, or it would falsely report rows as indexed
-            // after the FTS content is gone (store↔registry drift). Both
-            // DELETEs are ONE transaction (review 2026-11-16 §E): a crash or
-            // error between them used to leave the registry saying "indexed"
-            // over an empty shard, and the reconciler never re-indexed those.
-            try exec(db, SQLiteHygiene.beginWrite)
-            do {
-                try exec(db, "DELETE FROM email_search;")
-                try exec(db, "DELETE FROM indexed_message;")
-                try exec(db, "COMMIT;")
-            } catch {
-                try? exec(db, "ROLLBACK;")
-                throw error
-            }
-            try exec(db, "VACUUM;")   // outside the transaction: VACUUM cannot run inside one
+        // CLEAR-01 (owner report 2026-11-20): the whole index goes as files.
+        // Emptying every shard entry by entry and then VACUUM-ing each file
+        // took seconds per busy year; closing the handles and deleting the
+        // shard files (with their WAL/SHM companions and the layout) is the
+        // same end state — an empty index with an empty register, which the
+        // next write creates again — in a fraction of the time.
+        idleSweep?.cancel()
+        idleSweep = nil
+        for (_, handle) in shards { sqlite3_close_v2(handle) }
+        shards.removeAll()
+        shardLastAccess.removeAll()
+        shardLastTouch.removeAll()
+        shardHasUnregisteredRows.removeAll()
+        let dir = try shardsDirectory()
+        let contents = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        var failures: [String] = []
+        for url in contents {
+            let name = url.lastPathComponent
+            guard name.hasPrefix("email_search_") || name == "shard-layout" else { continue }
+            do { try FileManager.default.removeItem(at: url) } catch { failures.append(name) }
+        }
+        monthShards = false
+        layoutLoaded = false
+        if !failures.isEmpty {
+            throw FTSError.execFailed("search index files could not be removed: \(failures.joined(separator: ", "))")
         }
     }
 

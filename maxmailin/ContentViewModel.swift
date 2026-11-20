@@ -54,6 +54,13 @@ class ContentViewModel: ObservableObject {
     /// Stops the running import after the batch being saved: everything
     /// committed so far stays, with its checkpoint, so importing the file
     /// again continues from there. The cancelled path below reports it.
+    /// CLEAR-01: cancel the running import (if any) and wait until it stopped.
+    func cancelImportAndWait() async {
+        guard let task = importTask else { return }
+        cancelImport()
+        await task.value
+    }
+
     func cancelImport() {
         guard isParsing else { return }
         cancelPending = true
@@ -68,6 +75,8 @@ class ContentViewModel: ObservableObject {
     init() {
         statusMessage = "Please enter your sender email to begin."
         monitorMemoryPressure()
+        // CLEAR-01: deleting the archive stops a running import first.
+        ArchiveLifecycleService.stopRunningImport = { [weak self] in await self?.cancelImportAndWait() }
     }
 
     deinit {

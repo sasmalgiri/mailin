@@ -234,25 +234,27 @@ final class FTSQueryCorrectnessTests: XCTestCase {
         let before = try await fts.rowCount()
         XCTAssertEqual(before, c.all.count)
 
-        // Make the SECOND delete (the registry) fail, from another connection.
-        let shardFiles = try FileManager.default.contentsOfDirectory(atPath: shardsDir.path).filter { $0.hasSuffix(".db") }
-        XCTAssertFalse(shardFiles.isEmpty)
-        for name in shardFiles {
-            var db: OpaquePointer?
-            XCTAssertEqual(sqlite3_open(shardsDir.appendingPathComponent(name).path, &db), SQLITE_OK)
-            XCTAssertEqual(sqlite3_exec(db, """
-                CREATE TRIGGER block_registry_delete BEFORE DELETE ON indexed_message
-                BEGIN SELECT RAISE(ABORT, 'registry delete blocked by test'); END;
-                """, nil, nil, nil), SQLITE_OK)
-            sqlite3_close(db)
-        }
+        // CLEAR-01: the clear deletes shard files, so a shard's content and its
+        // register go together. Make the deletion fail (a folder whose entries
+        // cannot be removed): the clear reports it, and what is left still has
+        // content and register together.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: shardsDir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shardsDir.path) }
 
         do { try await fts.clear(); XCTFail("clear should report the failed delete") } catch {}
 
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: shardsDir.path)
         let after = try await fts.rowCount()
-        XCTAssertEqual(after, c.all.count, "the content delete rolled back with the registry delete")
+        XCTAssertEqual(after, c.all.count, "nothing was half-deleted: the shards that stayed keep their content")
         let registered = try await fts.indexedSubset(of: c.all.map(\.id))
-        XCTAssertEqual(registered.count, c.all.count)
+        XCTAssertEqual(registered.count, c.all.count, "and their register")
+
+        // With the folder writable again the clear removes both.
+        try await fts.clear()
+        let cleared = try await fts.rowCount()
+        XCTAssertEqual(cleared, 0)
+        let none = try await fts.indexedSubset(of: c.all.map(\.id))
+        XCTAssertTrue(none.isEmpty)
     }
 
     // MARK: - D-6 operators only in capitals in the query compiler too
