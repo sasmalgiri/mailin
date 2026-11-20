@@ -521,3 +521,23 @@ Exports: mbox 19.2 s, eml 18.0 s, pst 33.8 s; verify mbox 40.0 s / eml 37.7 s, b
 Release is not faster than the 2026-11-18 Debug figures (703 / 1,281 / 1,383 / 786 s): the engine is bound by the
 store and index writes, not by Swift code. First-visible / app-level figures (the in-app Import Measurement in a
 Release build) and the 1 GB, attachment-heavy and OST rows are still owed (PERF-00 in `FIVE_JOBS_TRACKER.md`).
+
+## 2026-11-19/20 — PERF-05 after-run (Release, head 10732b1 = PERF-01…04)
+
+Same matrix, same fixture, same command, detached worktree at **10732b1**, started 19:36 IST; the Mac was
+quieter than during the baseline (only the ~3-minute long-test class overlapped its build). Baseline figures in
+brackets are the e918bb0 rows above, taken under heavier concurrent load — so the gain below is an upper bound until
+the baseline is re-run quietly (owed).
+
+| Source | Import after | Import before (e918bb0) | Change | Footprint growth after / before | Reconciliation |
+|---|---|---|---|---|---|
+| mbox (real, mboxrd) | **567.3 s** | 768.4 s | −26 % | 103 MB / 50 MB | discovered = parsed = stored = FTS rows = 56,699, damaged 0, persist failed 0 |
+| eml folder tree (real files) | **1,045.1 s** | 1,611.6 s | −35 % | 132 MB / 141 MB | same; 118 / 118 folders |
+| zip of the tree (real files) | **852.2 s** | 1,315.1 s | −35 % | 0 MB / 0 MB | same; 118 / 118 folders |
+| pst (mailin writer, from the real archive) | **679.2 s** | 771.7 s | −12 % | 58 MB / 54 MB | same |
+
+Exports: mbox 16.9 s, eml 15.8 s, pst 33.5 s; verify mbox 39.4 s / eml 34.7 s, complete 56,699 / 56,699 on both.
+The mbox footprint growth doubled (two batches resident with the one-ahead pipeline, larger store cache under
+the adaptive budget) and stays far inside the 4 GiB soft budget. Store and FTS sizes unchanged (701.7 / 294.9 MB).
+Not yet in these rows: first-visible time (app only), attachment indexing to completion, 1 GB, attachment-heavy,
+OST, existing-archive import — PERF-00 owes them.
