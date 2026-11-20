@@ -576,10 +576,58 @@ struct ParserFactory {
             var declaredFolders = Set(expansion.declaredFolders)
             // Maildir tmp/ members: deliveries in progress, not messages — skipped and counted.
             if !expansion.skipped.isEmpty { categories["maildir_tmp_skipped"] = expansion.skipped.count }
+            // FAST-02 (fast import only): message files are parsed on several
+            // workers a window at a time and handed on as shared batches in
+            // the folder's order — the ordinals are those of the one-at-a-time
+            // path, so the checkpoint resumes exactly. Apple Mail libraries
+            // keep their own per-mailbox path.
+            let fastLanes = classification.format == .appleMailLibrary ? nil : ImportWorkerPolicy.fastReaders
+            var window: [(url: URL, folder: String?)] = []
+            var windowStartIndex = 0
+            func flushWindow() async throws {
+                guard !window.isEmpty else { return }
+                let members = window
+                window.removeAll(keepingCapacity: true)
+                let lanes = max(1, min(fastLanes?() ?? 1, members.count))
+                let results = await Self.parseMembersInParallel(members.map(\.url), lanes: lanes, senderEmail: senderEmail,
+                                                                retainAttachmentBytes: retainAttachmentBytes,
+                                                                materializeAttachments: materializeAttachments,
+                                                                mboxParserOnly: true)
+                let limit = max(1, await envelopeProvider?().maxMessages ?? batchSize)
+                var batch: [MBOXParser.RawEmail] = []
+                for (member, result) in zip(members, results) {
+                    let parsedMember: ParsedMember
+                    switch result {
+                    case .success(let value): parsedMember = value
+                    case .failure(let error):
+                        // As the one-at-a-time path: what came before is kept, the error stops the file.
+                        if !batch.isEmpty { try await onBatch(batch) }
+                        throw error
+                    }
+                    batch += Self.stamp(parsedMember.emails, folder: member.folder)
+                    total += parsedMember.report.totalMessages
+                    parsed += parsedMember.report.successfullyParsed
+                    failed += parsedMember.report.failed
+                    for (key, count) in parsedMember.report.errorCategories { categories[key, default: 0] += count }
+                    if batch.count >= limit {
+                        try await onBatch(batch)
+                        batch.removeAll(keepingCapacity: true)
+                    }
+                }
+                if !batch.isEmpty { try await onBatch(batch) }
+                onProgress?(Double(windowStartIndex + members.count) / Double(max(1, expansion.members.count)))
+            }
             for (index, member) in members.enumerated() {
                 // FOLD-02: the mailbox this member belongs to, from the layout.
                 let folder = SourceFormatClassifier.folderPath(member: member, root: fileURL, format: classification.format)
                 if let folder { declaredFolders.insert(folder) }
+                if fastLanes != nil {
+                    try Task.checkCancellation()
+                    if window.isEmpty { windowStartIndex = index }
+                    window.append((member, folder))
+                    if window.count >= max(1, (fastLanes?() ?? 1) * 8) { try await flushWindow() }
+                    continue
+                }
                 if classification.format == .appleMailLibrary, let route = largeMessages {
                     // CLOSE-01 follow-up: message by message, a large one by range.
                     let counts = try await parseLibraryMailbox(
@@ -625,6 +673,7 @@ struct ParserFactory {
                 failed += report.failed
                 for (key, count) in report.errorCategories { categories[key, default: 0] += count }
             }
+            try await flushWindow()
             var report = MBOXParser.ParseRecoveryReport(
                 totalMessages: total, successfullyParsed: parsed,
                 failed: failed, errorCategories: categories)
@@ -740,7 +789,8 @@ struct ParserFactory {
         let report: MBOXParser.ParseRecoveryReport
     }
     static func parseMembersInParallel(_ urls: [URL], lanes: Int, senderEmail: String,
-                                       retainAttachmentBytes: Bool, materializeAttachments: Bool) async -> [Result<ParsedMember, Error>] {
+                                       retainAttachmentBytes: Bool, materializeAttachments: Bool,
+                                       mboxParserOnly: Bool = false) async -> [Result<ParsedMember, Error>] {
         var results = [Result<ParsedMember, Error>?](repeating: nil, count: urls.count)
         let lanes = max(1, min(lanes, urls.count))
         await withTaskGroup(of: [(Int, Result<ParsedMember, Error>)].self) { group in
@@ -751,12 +801,19 @@ struct ParserFactory {
                     while index < urls.count {
                         var emails: [MBOXParser.RawEmail] = []
                         do {
-                            let report = try await parseStreamingCallback(
-                                fileURL: urls[index], senderEmail: senderEmail, batchSize: 1_000,
-                                retainAttachmentBytes: retainAttachmentBytes,
-                                materializeAttachments: materializeAttachments,
-                                nestedContainerAllowed: false,
-                                onBatch: { emails += $0 })
+                            // Folder members: the parser the one-at-a-time folder path uses.
+                            let report = mboxParserOnly
+                                ? try await MBOXParser.parseStreamingCallback(
+                                    fileURL: urls[index], senderEmail: senderEmail, batchSize: 1_000,
+                                    retainAttachmentBytes: retainAttachmentBytes,
+                                    materializeAttachments: materializeAttachments,
+                                    onBatch: { emails += $0 })
+                                : try await parseStreamingCallback(
+                                    fileURL: urls[index], senderEmail: senderEmail, batchSize: 1_000,
+                                    retainAttachmentBytes: retainAttachmentBytes,
+                                    materializeAttachments: materializeAttachments,
+                                    nestedContainerAllowed: false,
+                                    onBatch: { emails += $0 })
                             part.append((index, .success(ParsedMember(emails: emails, report: report))))
                         } catch {
                             part.append((index, .failure(error)))

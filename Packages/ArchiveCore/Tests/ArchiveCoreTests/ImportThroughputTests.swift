@@ -53,12 +53,13 @@ final class ImportThroughputTests: XCTestCase {
     }
 
     private enum Schedule: String, CaseIterable {
-        case sequential, pipelined, streaming
+        case sequential, pipelined, streaming, fast
         var label: String {
             switch self {
             case .sequential: return "offset engine, sequential"
             case .pipelined: return "offset engine, one batch ahead"
             case .streaming: return "streaming parser"
+            case .fast: return "fast import"
             }
         }
     }
@@ -112,8 +113,9 @@ final class ImportThroughputTests: XCTestCase {
         let configuration = "release"
         #endif
 
-        for schedule in Self.schedules {
-            let runRoot = root.appendingPathComponent(schedule.rawValue, isDirectory: true)
+        for (runIndex, schedule) in Self.schedules.enumerated() {
+            // One folder per run, so a schedule listed twice imports again.
+            let runRoot = root.appendingPathComponent("\(runIndex)-\(schedule.rawValue)", isDirectory: true)
             let store = SQLiteEmailStore(directory: runRoot.appendingPathComponent("store", isDirectory: true))
             let fts = FTSSearchIndex(shardsDirectory: runRoot.appendingPathComponent("fts", isDirectory: true))
             let coordinator = await BulkImportCoordinator(store: store, fts: fts,
@@ -123,7 +125,8 @@ final class ImportThroughputTests: XCTestCase {
             options.enforceStoragePreflight = false
             options.useOffsetEngine = schedule != .streaming
             options.recordLocators = schedule != .streaming
-            options.overlapBatches = schedule == .pipelined
+            options.overlapBatches = schedule == .pipelined || schedule == .fast
+            options.fastImport = schedule == .fast
             options.dedupPolicy = Self.dedupPolicy
 
             // MAILIN_SCALE_PRELOAD: an archive that is already large — the

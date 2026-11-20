@@ -170,6 +170,7 @@ enum EngineGuard {
         .v3PreservationExport: "maxmailin/PreservationExporter.swift",
         .v3PSTSpecReader: "\(P)EmailParserProtocol.swift",
         .v3PSTSpecWriter: "\(P)ArchiveExportService.swift",
+        .v4FastImport: "\(P)BulkImportCoordinator.swift",
         .v31Recovery: "\(P)PSTParser.swift",
         .v31DeepRecovery: "\(P)PSTParser.swift",
         .v31ShortcutsActions: "maxmailin/MailinAppEntities.swift",

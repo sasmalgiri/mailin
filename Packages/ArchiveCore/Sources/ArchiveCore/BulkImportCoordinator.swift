@@ -458,7 +458,11 @@ final class BulkImportCoordinator {
             }
         }
         do {
-            let summary = try await run(urls: urls, options: options, callbacks: callbacks)
+            // Rule 15: a process that dies inside a fast import switches it off
+            // at the next launch (the import of before is used then).
+            let summary = try await EngineBreadcrumbs.run(options.fastImport ? "v4FastImport" : nil) {
+                try await run(urls: urls, options: options, callbacks: callbacks)
+            }
             await restoreBudgets()
             return summary
         } catch is CancellationError {

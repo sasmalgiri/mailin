@@ -91,11 +91,14 @@ struct EngineSpec: Sendable {
                 name: String(localized: "Search exclusions (3.0)"),
                 detail: String(localized: "Search can exclude as well as include: put - or NOT before any filter (from:, to:, subject:, domain:, tag:, source:, type:, evidence:, filename:, before:, after:, has:attachment, is:pinned)."))
 
+        // FAST-06 (owner 2026-11-20: "put everything on"): stable — on by
+        // default — after the parity tests (FastImportParityTests) and the real
+        // corpus runs (50 MB: 66 → 8.5 s; 213 MB: ~600 → 30 s, every message
+        // stored and indexed). Still one switch away from the import of before.
         case .v4FastImport:
-            return EngineSpec(.archive, maturity: .experimental,
+            return EngineSpec(.archive,
                 name: String(localized: "Fast import"),
-                detail: String(localized: "Stores every message first, with readers and writers sized to this Mac, and writes the search index alongside. When the import ends, your Duplicates choice is applied: each duplicate is merged into the copy that is kept and moved to the Trash. A new, empty archive also gets its search index split by month. Also speeds up downloads from connected accounts."),
-                warning: String(localized: "Not yet tested on real archives. Duplicates go to the Trash after the import instead of being skipped, and the counts are final only when the duplicate pass ends."))
+                detail: String(localized: "Stores every message first, with readers and writers sized to this Mac, and writes the search index alongside. When the import ends, your Duplicates choice is applied: each duplicate is merged into the copy that is kept and moved to the Trash. A new, empty archive also gets its search index split by month. Also speeds up downloads from connected accounts."))
 
         // MARK: AI Insights (Page 2)
         case .v3AnalysisQueries:

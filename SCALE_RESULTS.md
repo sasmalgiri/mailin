@@ -615,3 +615,19 @@ noise, not the choice or the build. **Reading:** the three choices import at the
 about 65–75 s per 50 MB (≈ 0.7 MiB/s, ≈ 300 messages/s) into an empty archive on this Mac, before and after
 PERF-01…04 alike. Bigger archives are slower per message (0.35 MiB/s at 213 MB), so no single rate holds for
 every size.
+
+## 2026-11-20 — FAST-06: the fast import on the real corpus (Release, quiet Mac)
+
+`ImportThroughputTests`, schedule `fast` (= `Options.fastImport`, the default since FAST-06) against the normal
+import with the one-batch-ahead schedule, same build, alternated order, each run into its own empty archive.
+
+| File | Normal import | Fast import |
+|---|---|---|
+| Enron 50 MB slice, 21,752 messages | 66.9 s, 65.8 s | 8.5 s, 8.4 s |
+| Enron 213.5 MB mbox, 56,699 messages | 567–720 s (earlier runs) | 29.7 s |
+
+Every run: stored = indexed = parsed, 0 damaged, 0 persist failures. Peak footprint 256–334 MB. Most of the gain
+is the search-index write (FAST-01): the normal path deletes any earlier row for each message with a scan of the
+whole year shard (`email_search.email_id` is FTS5 UNINDEXED), so its cost grew with the archive; the fast path
+asks the shard's register first and only scans for a message that is really there. Correctness of the fast path
+against the normal one: `FastImportParityTests` (7) and the gate with the switch on.
