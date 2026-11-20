@@ -37,6 +37,8 @@ final class ListDateSpanTests: XCTestCase {
         for i in 0..<3 {
             text += "From a@example.com Mon Jan  1 00:00:00 2005\nMessage-ID: <late\(i)@example.com>\nFrom: a@example.com\nTo: b@example.com\nSubject: Late \(i)\nDate: Thu, \(27 + i) Dec 2005 10:00:00 +0000\n\nlate \(i)\n\n"
         }
+        // One message dated year 1 (as a broken header in the real Enron mail is): never the range's start.
+        text += "From a@example.com Mon Jan  1 00:00:00 2005\nMessage-ID: <nodate@example.com>\nFrom: a@example.com\nTo: b@example.com\nSubject: No date\nDate: Mon, 19 Dec 0001 10:00:00 +0000\n\nno date budgetword\n\n"
         let mbox = root.appendingPathComponent("span.mbox")
         try Data(text.utf8).write(to: mbox)
 

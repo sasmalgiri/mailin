@@ -4331,6 +4331,11 @@ actor SQLiteEmailStore: EmailArchiveStore {
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
+    /// LIST-01: a message with no readable date is stored at `Date.distantPast`
+    /// (year 1); the shown range skips such placeholders (anything before 1900,
+    /// as the search shards do) — the range is of real dates.
+    static let firstRealDateSeconds: Int64 = -2_208_988_800   // 1 Jan 1900 UTC
+
     /// LIST-01: first and last date (unix seconds) of what a non-text query
     /// lists — the rows `count` counts: the filter clauses when the query has
     /// structured filters, otherwise the date bounds over untrashed mail.
@@ -4340,7 +4345,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
         var clauses = filterSQL
         if !query.hasStructuredFilters { clauses.append(Self.notTrashedPredicate) }
         let whereSQL = clauses.isEmpty ? "1=1" : clauses.joined(separator: " AND ")
-        let stmt = try prepare(db, "SELECT MIN(e.date), MAX(e.date) FROM emails e WHERE \(whereSQL);")
+        let stmt = try prepare(db, "SELECT MIN(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END), MAX(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END) FROM emails e WHERE \(whereSQL);")
         defer { sqlite3_finalize(stmt) }
         _ = bindQueryValues(stmt, binds, startingAt: 1)
         guard try stepRow(stmt, db) else { return (nil, nil) }
@@ -4361,7 +4366,7 @@ actor SQLiteEmailStore: EmailArchiveStore {
             let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
             var whereSQL = "e.id IN (\(placeholders))"
             if !clauses.isEmpty { whereSQL += " AND " + clauses.joined(separator: " AND ") }
-            let stmt = try prepare(db, "SELECT MIN(e.date), MAX(e.date) FROM emails e WHERE \(whereSQL);")
+            let stmt = try prepare(db, "SELECT MIN(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END), MAX(CASE WHEN e.date >= \(Self.firstRealDateSeconds) THEN e.date END) FROM emails e WHERE \(whereSQL);")
             defer { sqlite3_finalize(stmt) }
             var idx: Int32 = 1
             for id in chunk { bindText(stmt, idx, id.uuidString); idx += 1 }
