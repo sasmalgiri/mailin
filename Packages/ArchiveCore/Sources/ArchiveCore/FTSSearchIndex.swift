@@ -307,6 +307,8 @@ actor FTSSearchIndex {
         for (_, handle) in shards { sqlite3_close(handle) }
         shards.removeAll()
         shardHasUnregisteredRows.removeAll()
+        sizeShardCount = nil
+        layoutLoaded = false
         shardLastAccess.removeAll()
         shardLastTouch.removeAll()
         didMigrateLegacy = false
@@ -417,7 +419,8 @@ actor FTSSearchIndex {
 
     func index(_ email: MBOXParser.RawEmail) throws {
         try migrateLegacyIfNeeded()
-        let db = try ensureShard(year: Self.year(for: email))
+        let db = try ensureShard(year: try shardKey(for: email))
+        try persistLayoutIfMissing()
         // Wrap the FTS row + registry upsert in ONE transaction (same guarantee
         // as indexBatch) so the two can never drift on a mid-write failure.
         try exec(db, SQLiteHygiene.beginWrite)
@@ -437,9 +440,10 @@ actor FTSSearchIndex {
         // Bucket by year first.
         var byYear: [Int: [MBOXParser.RawEmail]] = [:]
         for email in emails {
-            let y = Self.year(for: email)
+            let y = try shardKey(for: email)
             byYear[y, default: []].append(email)
         }
+        try persistLayoutIfMissing()
         // The import of before (default, the verified path).
         guard fastShardWrites else {
             for (year, group) in byYear {
@@ -492,6 +496,83 @@ actor FTSSearchIndex {
     /// FAST-01: per open shard, whether it holds FTS rows its register does not
     /// list (a legacy shard). Cleared when the handle closes.
     private var shardHasUnregisteredRows: [Int: Bool] = [:]
+
+    // MARK: - FAST-04 size shards (owner decision 2026-11-20)
+    //
+    // Year shards put most of an archive into the one or two busiest years, so
+    // parallel writers have little to share and one file grows huge. A new,
+    // empty index written by a fast import instead gets N equal shards:
+    // a message's shard is a stable hash of its id (FNV-1a — not Swift's
+    // per-process `hashValue`), so every path — import, re-index, the
+    // reconciler, the attachment job — puts a message in the same shard, and
+    // deletes already visit every shard. N follows the size of that first
+    // import (one shard per `sizeShardSourceBytes`, at least the writer count,
+    // 2…16, inside `importMaxOpenShards`). The layout is written beside the
+    // shards (`shard-layout`) and read by every later run; an index that
+    // already has shards keeps its year layout.
+
+    static let sizeShardBase = 100_000
+    static let sizeShardSourceBytes: Int64 = 256 * 1_048_576
+    private var sizeShardCount: Int?
+    private var layoutLoaded = false
+
+    private func layoutURL() throws -> URL { try shardsDirectory().appendingPathComponent("shard-layout") }
+
+    private func loadLayoutIfNeeded() throws {
+        if layoutLoaded { return }
+        layoutLoaded = true
+        let url = try layoutURL()
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { sizeShardCount = nil; return }
+        let parts = text.split(whereSeparator: \.isWhitespace)
+        if parts.count == 2, parts[0] == "size", let n = Int(parts[1]), n > 0 { sizeShardCount = n } else { sizeShardCount = nil }
+    }
+
+    /// A layout in force is always on disk (the folder may have been cleared
+    /// for a rebuild), so the next launch places messages the same way.
+    private func persistLayoutIfMissing() throws {
+        guard let count = sizeShardCount else { return }
+        let url = try layoutURL()
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("size \(count)\n".utf8).write(to: url, options: .atomic)
+    }
+
+    /// The shard a message belongs to under this index's layout.
+    private func shardKey(for email: MBOXParser.RawEmail) throws -> Int {
+        try loadLayoutIfNeeded()
+        guard let count = sizeShardCount else { return Self.year(for: email) }
+        return Self.sizeShardBase + Self.sizeShard(for: email.id, count: count)
+    }
+
+    nonisolated static func sizeShard(for id: UUID, count: Int) -> Int {
+        var hash: UInt64 = 0xcbf29ce484222325
+        withUnsafeBytes(of: id.uuid) { bytes in
+            for byte in bytes { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        }
+        return Int(hash % UInt64(max(1, count)))
+    }
+
+    nonisolated static func sizeShardCount(expectedSourceBytes: Int64, writers: Int) -> Int {
+        let bySize = Int((max(0, expectedSourceBytes) + sizeShardSourceBytes - 1) / sizeShardSourceBytes)
+        return min(16, max(2, max(writers, bySize)))
+    }
+
+    /// Adopts size shards when the index has no shards yet (a new archive).
+    /// Returns the shard count in force, nil for the year layout.
+    @discardableResult
+    func adoptSizeShardsIfEmpty(expectedSourceBytes: Int64, writers: Int) throws -> Int? {
+        try migrateLegacyIfNeeded()
+        try loadLayoutIfNeeded()
+        if let count = sizeShardCount { return count }
+        guard try discoverAllShardYears().isEmpty else { return nil }
+        let count = Self.sizeShardCount(expectedSourceBytes: expectedSourceBytes, writers: writers)
+        let url = try layoutURL()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("size \(count)\n".utf8).write(to: url, options: .atomic)
+        sizeShardCount = count
+        logger.notice("FTS size shards adopted: \(count) shards")
+        return count
+    }
 
     /// Test-only: counts calls to `search` so a wiring test can assert the live
     /// search path actually reached FTS5 (vs. the in-RAM fallback). Reset
@@ -637,7 +718,8 @@ actor FTSSearchIndex {
         }
 
         var shardYears = try discoverAllShardYears()
-        if let years { shardYears = shardYears.filter { years.contains($0) } }
+        // FAST-04: size shards hold every year, so a date prune keeps them all.
+        if let years { shardYears = shardYears.filter { years.contains($0) || $0 >= Self.sizeShardBase } }
 
         // Fetch the next `limit` rows of every (pruned) shard from its offset.
         struct Row { let id: UUID?; let idString: String; let rank: Double }
