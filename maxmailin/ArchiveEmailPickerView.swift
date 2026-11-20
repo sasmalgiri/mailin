@@ -29,6 +29,12 @@ struct ArchiveEmailPickerView: View {
     @State private var total = 0
     @State private var searchTask: Task<Void, Never>? = nil
     @State private var nextCursor: EmailPageCursor?
+    /// Owner report 2026-11-20 ("what does Show more mean, is it working?"):
+    /// the next page loads by itself as the list nears its end, one load at a
+    /// time; a superseded search's page is dropped; a failed load says so.
+    @State private var isLoadingMore = false
+    @State private var loadMoreFailed = false
+    @State private var queryRevision = 0
 
     private static let limit = 200
 
@@ -73,7 +79,8 @@ struct ArchiveEmailPickerView: View {
                 .frame(maxWidth: .infinity)
                 Spacer()
             } else {
-                List(results) { row in
+                List {
+                  ForEach(results) { row in
                     Button { toggle(row.id) } label: {
                         HStack(alignment: .top, spacing: Spacing.small) {
                             Image(systemName: selected.contains(row.id) ? "checkmark.circle.fill" : "circle")
@@ -96,10 +103,33 @@ struct ArchiveEmailPickerView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                }
-                // The next page on request: every match can be reached.
-                if nextCursor != nil {
-                    Button(String(localized: "Show more")) { Task { await loadMore() } }
+                    // Near the end of what is loaded: the next page, by itself.
+                    .onAppear {
+                        if nextCursor != nil, !loadMoreFailed,
+                           let index = results.firstIndex(where: { $0.id == row.id }), index >= results.count - 20 {
+                            Task { await loadMore() }
+                        }
+                    }
+                  }
+                  // The end of the loaded list: every match can be reached.
+                  if nextCursor != nil {
+                      HStack(spacing: Spacing.small) {
+                          if isLoadingMore {
+                              ProgressView().controlSize(.small)
+                              Text("Loading more…").font(Typography.caption1).foregroundColor(AppColors.secondary)
+                          } else if loadMoreFailed {
+                              Text("More messages could not be loaded.").font(Typography.caption1).foregroundColor(.orange)
+                              Button(String(localized: "Retry")) { loadMoreFailed = false; Task { await loadMore() } }
+                          } else {
+                              Button(String(localized: "Load more messages")) { Task { await loadMore() } }
+                          }
+                          Spacer()
+                          Text("Showing \(results.count) of \(total)")
+                              .font(Typography.caption2).foregroundColor(AppColors.secondary)
+                      }
+                      .padding(.vertical, Spacing.xSmall)
+                      .accessibilityIdentifier("archivePicker.loadMore")
+                  }
                 }
             }
 
@@ -140,16 +170,29 @@ struct ArchiveEmailPickerView: View {
 
     @MainActor
     private func loadMore() async {
-        guard let cursor = nextCursor else { return }
+        guard let cursor = nextCursor, !isLoadingMore else { return }
+        isLoadingMore = true
+        defer { isLoadingMore = false }
+        let revision = queryRevision
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
         let query = EmailQuery(text: trimmed.isEmpty ? nil : trimmed)
-        let page = try? await ArchiveDataService.shared.page(query: query, cursor: cursor, limit: Self.limit)
-        results += page?.summaries ?? []
-        nextCursor = page?.nextCursor
+        do {
+            let page = try await ArchiveDataService.shared.page(query: query, cursor: cursor, limit: Self.limit)
+            guard revision == queryRevision else { return }   // the search changed meanwhile
+            let known = Set(results.map(\.id))
+            results += page.summaries.filter { !known.contains($0.id) }
+            nextCursor = page.nextCursor
+            loadMoreFailed = false
+        } catch {
+            guard revision == queryRevision else { return }
+            loadMoreFailed = true
+        }
     }
 
     @MainActor
     private func load() async {
+        queryRevision += 1
+        loadMoreFailed = false
         isLoading = true
         defer { isLoading = false }
         let trimmed = searchText.trimmingCharacters(in: .whitespaces)
