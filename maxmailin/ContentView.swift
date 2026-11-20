@@ -4107,7 +4107,8 @@ private func handleMultipleFiles(_ urls: [URL]) {
                                      dedupPolicy: choices.dedupPolicy,
                                      maxEmails: cap,
                                      copiesOriginals: choices.copiesOriginals,
-                                     inputByteLimit: inputByteLimit)
+                                     inputByteLimit: inputByteLimit,
+                                     fastImport: choices.fastImport)
     }
 
     private func resolveAndHandleSelectedFile(_ url: URL) {

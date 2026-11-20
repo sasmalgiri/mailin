@@ -261,8 +261,10 @@ class ContentViewModel: ObservableObject {
             if preserve { hold(batch) }
         }
     }
+    /// `fastImport`: this import's choice from the import window; nil = the
+    /// Settings default (`Capability.v4FastImport`).
     func parseSelectedFiles(_ urls: [URL], dedupPolicy: DedupPolicy, maxEmails: Int? = nil,
-                            copiesOriginals: Bool = true, inputByteLimit: Int? = nil) {
+                            copiesOriginals: Bool = true, inputByteLimit: Int? = nil, fastImport: Bool? = nil) {
         guard !isParsing else { return }
         // Service boundary: no caller imports past the person's role.
         if let why = OrgPolicy.denial(.importMail) {
@@ -356,7 +358,7 @@ class ContentViewModel: ObservableObject {
                                              maxEmails: maxEmails,
                                              senderEmail: self.senderEmail,
                                              useOffsetEngine: useOffsetEngine,
-                                             fastImport: self.isCapabilityOn?(.v4FastImport) ?? false)
+                                             fastImport: fastImport ?? self.isCapabilityOn?(.v4FastImport) ?? false)
 
             do {
                 let summary = try await self.importCoordinator.runImport(

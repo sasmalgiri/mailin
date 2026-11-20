@@ -118,6 +118,10 @@ struct ImportChoices: Sendable {
     /// searches file contents). Stored under `indexAttachmentTextKey` so the
     /// launch-time kick honours the last choice.
     var indexAttachmentText: Bool
+    /// FAST-07 (owner 2026-11-20): this import only — starts from Settings ▸
+    /// Modules ▸ Fast import (the default) and never changes it. Nil = the
+    /// setting.
+    var fastImport: Bool? = nil
 
     static let indexAttachmentTextKey = "indexAttachmentTextAfterImport"
 
@@ -144,6 +148,8 @@ struct GuidedImportSheet: View {
     @State private var chosenCopiesOriginals = false
     @State private var chosenIndexAttachmentText = ImportChoices.indexAttachmentTextDefault()
     @State private var didSeedChoices = false
+    /// FAST-07: this import's choice, seeded from the Settings default.
+    @State private var chosenFastImport = true
     /// Free input allowance: what the archive already holds (from the store)
     /// and what these files add, measured on disk including folder contents.
     @State private var ingestedBytes: Int?
@@ -192,6 +198,7 @@ struct GuidedImportSheet: View {
             guard !didSeedChoices else { return }
             chosenDedup = dedupPolicy
             chosenCopiesOriginals = false   // F03: no copy exists in 3.0, whatever the caller seeded
+            chosenFastImport = modules.isOn(.v4FastImport)
             didSeedChoices = true
         }
         // The space requirement depends on copy-vs-reference, so the plan is
@@ -228,9 +235,35 @@ struct GuidedImportSheet: View {
             Toggle("Index attachment contents after import", isOn: $chosenIndexAttachmentText)
                 .help("Extracts text from attachments in the background so in:attachments finds words inside PDFs and documents; off saves time and disk")
                 .accessibilityIdentifier("import.sheet.attachmentText")
+            fastImportChoice
         }
         .pickerStyle(.menu)
         .controlSize(.small)
+    }
+
+    /// FAST-07 (owner 2026-11-20): the fast import is the person's choice, in
+    /// the import window — the same switch as Settings ▸ Modules ▸ Fast import
+    /// — with what it does and the crash safeguard said next to it.
+    @ViewBuilder
+    private var fastImportChoice: some View {
+        let isOn = chosenFastImport
+        Toggle("Fast import", isOn: $chosenFastImport)
+            .accessibilityIdentifier("import.sheet.fastImport")
+        Text(isOn
+             ? String(localized: "Uses readers and writers sized to this Mac. Your Duplicates choice is applied when the import ends: each duplicate is merged into the copy that is kept and moved to the Trash. Crash safeguard: if mailin stops unexpectedly during a fast import, the next launch switches Fast import off and uses the normal import.")
+             : String(localized: "Normal import: one message at a time, duplicates skipped while importing. Slower on large archives."))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("import.sheet.fastImportNote")
+        if !isOn, EngineGuard.lastTrip(.v4FastImport) != nil {
+            Label("Fast import was switched off because mailin stopped unexpectedly during a fast import. Turn it on again here to use it.",
+                  systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("import.sheet.fastImportTripped")
+        }
     }
 
     /// R12: what recovery will do in this run, said before Start.
@@ -404,6 +437,9 @@ struct GuidedImportSheet: View {
             row(String(localized: "Engine"), modules.isOn(.offsetParser)
                 ? String(localized: "Offset parser (no message size limit)")
                 : String(localized: "Streaming parser"))
+            row(String(localized: "Speed"), chosenFastImport
+                ? String(localized: "Fast import — duplicates applied after the import")
+                : String(localized: "Normal import"))
             row(String(localized: "Duplicates"), chosenDedup == .preserveAll
                 ? String(localized: "Keep every copy")
                 : String(localized: "Skip messages already in the archive"))
@@ -434,7 +470,8 @@ struct GuidedImportSheet: View {
                 onStart(ImportChoices(urls: plan?.supported.map(\.url) ?? urls,
                                       dedupPolicy: chosenDedup,
                                       copiesOriginals: chosenCopiesOriginals,
-                                      indexAttachmentText: chosenIndexAttachmentText))
+                                      indexAttachmentText: chosenIndexAttachmentText,
+                                      fastImport: chosenFastImport))
             }
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
