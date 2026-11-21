@@ -186,6 +186,112 @@ final class MailinClickThroughUITests: XCTestCase {
         }
     }
 
+    /// 4.0 App Store screenshots (owner 2026-11-21), in the listing's order:
+    /// the archive, a message, search with its operators, Advanced Search,
+    /// duplicates — on the bundled demo archive — then Live Mail on the
+    /// in-memory sample account (a fresh, isolated archive, so no real
+    /// account or mail can appear). Existence-guarded: a surface that moved
+    /// is skipped, never faked. Attachments are exported from the result.
+    func testCaptureAppStoreScreenshots40_iOS() {
+        _ = app.buttons.firstMatch.waitForExistence(timeout: 120)
+        Thread.sleep(forTimeInterval: 3)
+        clearForScreenshot()
+        snap("40-01-archive")
+
+        // A message.
+        let row = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'from '")).firstMatch
+        if row.waitForExistence(timeout: 10) {
+            row.tap(); Thread.sleep(forTimeInterval: 2.0); snap("40-02-message")
+            let back = app.navigationBars.buttons.firstMatch
+            if back.exists { back.tap(); Thread.sleep(forTimeInterval: 1.0) }
+        }
+
+        // Search, then the operators list beside the box.
+        let field = app.textFields.matching(NSPredicate(format: "placeholderValue CONTAINS[c] 'search'")).firstMatch
+        if field.waitForExistence(timeout: 10) {
+            field.tap()
+            if app.keyboards.firstMatch.waitForExistence(timeout: 5) {
+                clearForScreenshot()          // the keyboard's first-use tip
+                field.typeText("launch\n")    // Return closes the keyboard
+                Thread.sleep(forTimeInterval: 2.0)
+                clearForScreenshot()
+                snap("40-03-search")
+            }
+            if tap(app.buttons["list.search.operators"]) {
+                Thread.sleep(forTimeInterval: 1.2); clearForScreenshot(); snap("40-04-search-operators")
+                // Close the list with its own button; a swipe left it open.
+                let ops = app.buttons["list.search.operators"].firstMatch
+                if ops.exists, ops.isHittable { ops.tap() } else { app.tap() }
+                Thread.sleep(forTimeInterval: 0.8)
+            }
+            let clear = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Clear'")).firstMatch
+            if clear.exists { clear.tap(); Thread.sleep(forTimeInterval: 0.8) }
+            if app.keyboards.firstMatch.exists { app.swipeDown(velocity: .fast); Thread.sleep(forTimeInterval: 0.8) }
+        }
+
+        // Advanced Search: the button beside the box, else the list's … menu.
+        if tap(app.buttons["list.search.advanced"], timeout: 4) {
+            Thread.sleep(forTimeInterval: 1.5); snap("40-05-advanced-search")
+            let cancel = app.buttons["Cancel"].firstMatch
+            if cancel.exists { cancel.tap() } else { dismissModal() }
+            Thread.sleep(forTimeInterval: 1.0)
+        } else if tap(app.buttons["List actions"]) {
+            Thread.sleep(forTimeInterval: 0.8)
+            let advanced = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Advanced Search'")).firstMatch
+            if advanced.waitForExistence(timeout: 3) {
+                advanced.tap(); Thread.sleep(forTimeInterval: 1.5); snap("40-05-advanced-search")
+                let cancel = app.buttons["Cancel"].firstMatch
+                if cancel.exists { cancel.tap() } else { dismissModal() }
+                Thread.sleep(forTimeInterval: 1.0)
+            } else {
+                app.swipeDown(velocity: .fast); Thread.sleep(forTimeInterval: 0.6)
+            }
+        }
+
+        // Duplicates, from Filters & Tools.
+        if tap(app.buttons["Filters & Tools"]) {
+            Thread.sleep(forTimeInterval: 1.5)
+            let dup = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Duplicate'")).firstMatch
+            if dup.waitForExistence(timeout: 3) {
+                dup.tap(); Thread.sleep(forTimeInterval: 1.5)
+                dismissTutorial()
+                snap("40-06-duplicates"); dismissModal()
+            } else {
+                dismissModal()
+            }
+        }
+
+        // Live Mail on the in-memory sample account (fresh, isolated archive).
+        app.terminate()
+        app = makeApp()
+        app.launchArguments = ["--uitest"]
+        app.launchEnvironment["MAILIN_UITEST_FRESH_ARCHIVE"] = "shots-\(UUID().uuidString)"
+        app.launchEnvironment[UITestMailSampleKey] = "1"
+        app.launch()
+        _ = app.wait(for: .runningForeground, timeout: 30)
+        Thread.sleep(forTimeInterval: 3)
+        if openPage("Live Mail") {
+            Thread.sleep(forTimeInterval: 3); clearForScreenshot(); snap("40-07-live-mail")
+            let message = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'from'")).firstMatch
+            if message.waitForExistence(timeout: 5) {
+                message.tap(); Thread.sleep(forTimeInterval: 2.0); snap("40-08-live-mail-message")
+            }
+            _ = openPage("Archive")
+        }
+    }
+
+    /// What's New and the crash-safeguard banner are not part of a listing
+    /// picture: Continue / Dismiss them if they are showing.
+    private func clearForScreenshot() {
+        for label in ["Continue", "Dismiss", "Got It"] {
+            let b = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            if b.waitForExistence(timeout: 2), b.isHittable { b.tap(); Thread.sleep(forTimeInterval: 1.0) }
+        }
+    }
+
+    /// Mirrors `UITestMailSample.environmentKey` (the app target is not linked into UI tests).
+    private let UITestMailSampleKey = "MAILIN_UITEST_MAIL_SAMPLE"
+
     /// Dismiss a feature's first-run tutorial sheet ("Got It …") if present.
     private func dismissTutorial() {
         let gotIt = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] 'Got It'")).firstMatch
@@ -216,6 +322,102 @@ final class MailinClickThroughUITests: XCTestCase {
         add(att)
     }
 
+    #endif
+
+    #if os(macOS)
+    /// 4.0 App Store screenshots for the Mac (owner 2026-11-21: "do as I say,
+    /// I will approve"). Runs on the archive already on this Mac (public Enron
+    /// mail) and stays on the Archive page, so no connected account appears.
+    /// Window-only captures, saved as keep-always attachments.
+    func testCaptureAppStoreScreenshots40_macOS() {
+        _ = app.windows.firstMatch.waitForExistence(timeout: 120)
+        Thread.sleep(forTimeInterval: 4)
+        macClear()
+        _ = openPage("Archive")
+        Thread.sleep(forTimeInterval: 2)
+        macClear()
+
+        // Search for an ordinary business word, open the first result.
+        let field = app.textFields.matching(NSPredicate(format: "placeholderValue CONTAINS[c] 'search'")).firstMatch
+        if field.waitForExistence(timeout: 15) {
+            field.click()
+            app.typeKey("a", modifierFlags: .command); app.typeKey(.delete, modifierFlags: [])
+            // One key at a time: typing a word at once dropped letters ("elne").
+            for ch in "pipeline" { field.typeText(String(ch)); Thread.sleep(forTimeInterval: 0.15) }
+            field.typeText("\n")
+            Thread.sleep(forTimeInterval: 5)
+            // Open the first result: a sender address in the middle column.
+            let win = app.windows.firstMatch.frame
+            let senders = app.staticTexts.matching(NSPredicate(format: "label CONTAINS '@'"))
+            for i in 0..<min(senders.count, 40) {
+                let t = senders.element(boundBy: i)
+                let f = t.frame
+                if f.minX > win.minX + win.width * 0.25, f.maxX < win.minX + win.width * 0.68, t.isHittable {
+                    t.click(); Thread.sleep(forTimeInterval: 3); break
+                }
+            }
+            macClear()
+            macHoverAway()
+            macSnap("40-mac-01-search-and-message")
+
+            // The search operators list.
+            let ops = app.buttons["list.search.operators"].firstMatch
+            if ops.waitForExistence(timeout: 5), ops.isHittable {
+                ops.click(); Thread.sleep(forTimeInterval: 1.5); macHoverAway(); macSnap("40-mac-02-search-operators")
+                app.typeKey(.escape, modifierFlags: []); Thread.sleep(forTimeInterval: 1)
+            }
+        }
+
+        // Advanced Search.
+        let advanced = app.buttons["list.search.advanced"].firstMatch
+        if advanced.waitForExistence(timeout: 5), advanced.isHittable {
+            advanced.click(); Thread.sleep(forTimeInterval: 2); macSnap("40-mac-03-advanced-search")
+            let cancel = app.buttons["Cancel"].firstMatch
+            if cancel.exists, cancel.isHittable { cancel.click() } else { app.typeKey(.escape, modifierFlags: []) }
+            Thread.sleep(forTimeInterval: 1.5)
+        }
+
+        // Duplicates.
+        let dup = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Find Duplicates Now'")).firstMatch
+        if dup.waitForExistence(timeout: 5), dup.isHittable {
+            dup.click(); Thread.sleep(forTimeInterval: 3)
+            macHoverAway()
+            // The whole-archive scan takes a while on 56,699 messages.
+            let scanning = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Scanning'")).firstMatch
+            var waited = 0
+            while scanning.exists && waited < 240 { Thread.sleep(forTimeInterval: 2); waited += 2 }
+            Thread.sleep(forTimeInterval: 2)
+            let gotIt = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Got It'")).firstMatch
+            if gotIt.exists, gotIt.isHittable { gotIt.click(); Thread.sleep(forTimeInterval: 1.5) }
+            macSnap("40-mac-04-duplicates")
+            app.typeKey(.escape, modifierFlags: []); Thread.sleep(forTimeInterval: 1.5)
+        }
+
+        // Leave the list as it was.
+        if field.exists {
+            field.click(); app.typeKey("a", modifierFlags: .command); app.typeKey(.delete, modifierFlags: [])
+        }
+    }
+
+    private func macClear() {
+        for label in ["Continue", "Dismiss", "Got It"] {
+            let b = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            if b.waitForExistence(timeout: 2), b.isHittable { b.click(); Thread.sleep(forTimeInterval: 1.0) }
+        }
+    }
+
+    /// Park the pointer on the title bar so no tooltip is in the picture.
+    private func macHoverAway() {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01)).hover()
+        Thread.sleep(forTimeInterval: 1.2)
+    }
+
+    private func macSnap(_ name: String) {
+        let att = XCTAttachment(screenshot: app.windows.firstMatch.screenshot())
+        att.name = name
+        att.lifetime = .keepAlways
+        add(att)
+    }
     #endif
 
     #if os(macOS)

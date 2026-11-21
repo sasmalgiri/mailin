@@ -565,7 +565,8 @@ struct SearchOperatorsHelpButton: View {
         .help("Search operators")
         .accessibilityLabel(String(localized: "Search operators"))
         .accessibilityIdentifier("list.search.operators")
-        .popover(isPresented: $showing, arrowEdge: .bottom) {
+        // Below the box: above it, the list ran off the top of an iPhone screen.
+        .popover(isPresented: $showing, arrowEdge: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Search operators")
                     .font(.headline)
