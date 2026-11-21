@@ -343,8 +343,12 @@ final class MailinClickThroughUITests: XCTestCase {
             field.click()
             app.typeKey("a", modifierFlags: .command); app.typeKey(.delete, modifierFlags: [])
             // One key at a time: typing a word at once dropped letters ("elne").
-            for ch in "pipeline" { field.typeText(String(ch)); Thread.sleep(forTimeInterval: 0.15) }
-            field.typeText("\n")
+            // Paste, not type: typed keys were dropped while the list reloads ("elne").
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("pipeline", forType: .string)
+            app.typeKey("v", modifierFlags: .command)
+            Thread.sleep(forTimeInterval: 1)
+            app.typeKey(.return, modifierFlags: [])
             Thread.sleep(forTimeInterval: 5)
             // Open the first result: a sender address in the middle column.
             let win = app.windows.firstMatch.frame
@@ -390,12 +394,21 @@ final class MailinClickThroughUITests: XCTestCase {
             let gotIt = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Got It'")).firstMatch
             if gotIt.exists, gotIt.isHittable { gotIt.click(); Thread.sleep(forTimeInterval: 1.5) }
             macSnap("40-mac-04-duplicates")
-            app.typeKey(.escape, modifierFlags: []); Thread.sleep(forTimeInterval: 1.5)
+            let cancelDup = app.buttons["Cancel"].firstMatch
+            if cancelDup.exists, cancelDup.isHittable { cancelDup.click() } else { app.typeKey("w", modifierFlags: .command) }
+            Thread.sleep(forTimeInterval: 2)
         }
 
         // Leave the list as it was.
         if field.exists {
             field.click(); app.typeKey("a", modifierFlags: .command); app.typeKey(.delete, modifierFlags: [])
+        }
+
+        // Live Mail (owner 2026-11-22: showing the connected account is fine).
+        if openPage("Live Mail") {
+            Thread.sleep(forTimeInterval: 4); macClear(); macHoverAway()
+            macSnap("40-mac-05-live-mail")
+            _ = openPage("Archive")
         }
     }
 
