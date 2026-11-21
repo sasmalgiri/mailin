@@ -46,6 +46,25 @@ text to paste; Google Auth Platform for project mailin-mail):
 - [ ] Not committed on purpose: `mailin.xcodeproj/xcshareddata/xcodecloud/manifest.json` (Xcode Cloud manifest
       inside the old 1.0 `mailin.xcodeproj`, not the release project) — delete it or leave it untracked.
 
+## Status 2026-11-21 (candidate after the 20–21 Nov work, agent part done)
+
+Since 19 Nov the candidate gained: fast import on by default (FAST-01…07), whole-list counts / dates / printing fixes
+(LIST-01/02, PRINT-01, DEEP-01), Advanced Search + Whole words + search operators on the main list, New Message from
+any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-01). Build stays **4.0 (1000)** — no
+4.0 build has been uploaded yet; if one was uploaded in the meantime, raise the build to 1001 in Xcode first.
+
+- [x] Package `swift test -c release`: 781 run, 0 failed, 26 opt-in skips.
+- [x] Five-jobs gate + touched classes (Debug-Connected): 336 run, 333 passed, 2 owner-bound skips; one load-timing
+      failure passed alone and in a quiet re-run of its class (207/208, 1 owner-bound skip).
+- [x] What's New in the app (10 languages) and in `V4_STORE_METADATA_DRAFT.md` updated for the new features.
+- [x] Build 0 warnings; every new string in 10 languages (InterfaceLocalizationTests pass).
+- [ ] **Owner, in the app before the screenshots / review:** Live Mail ▸ Drafts ▸ "Delete 12 empty drafts".
+- [ ] **Owner:** Settings ▸ Modules ▸ Archive ▸ "Search model" should be **on** (your 21 Nov screenshots show the
+      search box without Whole words / Advanced Search, which appear only with it on). If it was switched off by the
+      crash safeguard, turn it back on and tell the agent.
+- [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
+      journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
+
 ## 0. Before archiving
 
 - [x] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
