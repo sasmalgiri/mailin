@@ -45,6 +45,10 @@ struct MailDraftsList: View {
                     .foregroundStyle(.orange)
             }
             ForEach(model.drafts) { draft in
+                // DRAFT-02 (owner 2026-11-21: "not selectable on clicking on it except the no
+                // recipient word", "not able to delete"): the whole row opens the draft, and a
+                // trash button on the row deletes it (right-click and swipe too).
+                HStack(alignment: .center, spacing: 8) {
                 Button { sheet = .compose(draft.id) } label: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(draft.subject.isEmpty ? String(localized: "(no subject)") : draft.subject)
@@ -56,17 +60,30 @@ struct MailDraftsList: View {
                         HStack {
                             if let account = model.account(draft.accountID)?.account {
                                 MailAccountBadge(account: account).font(.caption2)
+                            } else {
+                                Text("Account removed").font(.caption2).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Text(draft.updatedAt, format: .dateTime.day().month().hour().minute()).font(.caption2).foregroundStyle(.secondary)
                         }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                Button(role: .destructive) { delete([draft.id]) } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help(String(localized: "Delete draft"))
+                .accessibilityLabel(String(localized: "Delete draft"))
+                .accessibilityIdentifier("mail.drafts.delete")
+                }
                 .contextMenu {
-                    Button(String(localized: "Delete draft"), role: .destructive) {
-                        Task { await model.run { try await model.backend.discardDraft(draft.id) }; await model.reloadDrafts() }
-                    }
+                    Button(String(localized: "Delete draft"), role: .destructive) { delete([draft.id]) }
+                }
+                .swipeActions {
+                    Button(String(localized: "Delete draft"), role: .destructive) { delete([draft.id]) }
                 }
             }
         }
@@ -75,14 +92,23 @@ struct MailDraftsList: View {
         .confirmationDialog(String(localized: "Delete \(emptyDrafts.count) empty drafts?"), isPresented: $confirmEmptyCleanup,
                             titleVisibility: .visible) {
             Button(String(localized: "Delete \(emptyDrafts.count) empty drafts"), role: .destructive) {
-                let ids = emptyDrafts.map(\.id)
-                Task {
-                    for id in ids { await model.run { try await model.backend.discardDraft(id) } }
-                    await model.reloadDrafts()
-                }
+                delete(emptyDrafts.map(\.id))
             }
         } message: {
             Text("They have no recipients, subject, text or attachments. Drafts with anything in them are kept.")
+        }
+    }
+
+    /// DRAFT-02: deletes, re-reads the list, and says so when a draft is still
+    /// there afterwards — a delete is never silently a no-op.
+    private func delete(_ ids: [UUID]) {
+        Task {
+            for id in ids { await model.run { try await model.backend.discardDraft(id) } }
+            await model.reloadDrafts()
+            let left = Set(model.drafts.map(\.id)).intersection(ids).count
+            if left > 0 {
+                model.message = String(localized: "\(left) of \(ids.count) drafts could not be deleted.")
+            }
         }
     }
 }
@@ -113,6 +139,9 @@ struct MailComposeSheet: View {
     @State private var pickingArchive = false
     @State private var editingSignature = false
     @State private var signatureText = ""
+    /// DRAFT-02: set on Close — a late autosave or editor change can no longer
+    /// save (and so bring back) a draft that was just discarded.
+    @State private var closed = false
 
     private enum Field: Hashable { case to, cc, bcc, subject, body }
 
@@ -575,7 +604,7 @@ struct MailComposeSheet: View {
 
     /// Edits the draft and schedules an autosave (one second after the last edit).
     private func update(_ change: (inout Draft) -> Void) {
-        guard var d = draft else { return }
+        guard !closed, var d = draft else { return }
         change(&d)
         draft = d
         saveTask?.cancel()
@@ -591,16 +620,18 @@ struct MailComposeSheet: View {
     private func closeDraft() async {
         saveTask?.cancel()
         if let d = draft, d.isUntouched {
+            closed = true
             try? await model.backend.discardDraft(d.id)
             await model.reloadDrafts()
         } else {
             await saveNow()
+            closed = true
         }
         dismiss()
     }
 
     private func saveNow() async {
-        guard let d = draft else { return }
+        guard !closed, let d = draft else { return }
         do {
             draft = try await model.backend.saveDraft(d)
             error = nil

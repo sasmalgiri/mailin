@@ -544,6 +544,9 @@ final class DraftComposeTests: XCTestCase {
         XCTAssertTrue(draft.isUntouched)
         draft.htmlBody = "<p>&nbsp;</p>"
         XCTAssertTrue(draft.isUntouched, "an empty editor's HTML is still empty")
+        draft.plainBody = "\u{200B}\u{FFFC}\u{00A0}\n"
+        XCTAssertTrue(draft.isUntouched, "invisible characters an editor leaves are not text")
+        draft.plainBody = ""
         draft.subject = "Hi"
         XCTAssertFalse(draft.isUntouched)
         draft.subject = "  "

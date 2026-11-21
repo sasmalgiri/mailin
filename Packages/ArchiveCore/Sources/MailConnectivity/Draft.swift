@@ -135,9 +135,11 @@ public struct Draft: Codable, Sendable, Equatable, Identifiable {
     /// Closing such a draft discards it; replies and forwards are always kept.
     public var isUntouched: Bool {
         guard kind == .new else { return false }
-        func blank(_ s: String?) -> Bool { (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        // Invisible characters an editor can leave behind count as blank too.
+        let invisible = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}\u{FFFC}\u{00A0}"))
+        func blank(_ s: String?) -> Bool { (s ?? "").trimmingCharacters(in: invisible).isEmpty }
         let htmlText = htmlBody.map { $0.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "&nbsp;", with: " ") }
+            .replacingOccurrences(of: "&nbsp;", with: " ").replacingOccurrences(of: "&#8203;", with: "") }
         return to.isEmpty && cc.isEmpty && bcc.isEmpty && blank(subject) && blank(plainBody) && blank(htmlText)
             && attachments.isEmpty
     }

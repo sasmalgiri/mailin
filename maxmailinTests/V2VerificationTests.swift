@@ -14103,6 +14103,10 @@ final class DeepDiveAppFixesTests: XCTestCase {
         let composer = try source("MailComposeViews.swift")
         XCTAssertTrue(composer.contains("Button(String(localized: \"Close\")) { Task { await closeDraft() } }"))
         XCTAssertTrue(composer.contains("if let d = draft, d.isUntouched"))
+        // DRAFT-02: the whole row opens, a trash button deletes, a closed composer never saves again.
+        XCTAssertTrue(composer.contains(".contentShape(Rectangle())") && composer.contains("mail.drafts.delete"))
+        XCTAssertTrue(composer.contains("guard !closed, let d = draft else { return }"))
+        XCTAssertTrue(composer.contains("drafts could not be deleted."))
         XCTAssertTrue(composer.contains("confirmationDialog(String(localized: \"Delete \\(emptyDrafts.count) empty drafts?\")"))
     }
 }
