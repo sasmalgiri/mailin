@@ -129,6 +129,19 @@ public struct Draft: Codable, Sendable, Equatable, Identifiable {
         self.messageIDToken = messageIDToken; self.revision = 0; self.createdAt = createdAt; self.updatedAt = createdAt
     }
 
+    /// DRAFT-01 (owner screenshots 2026-11-21: 12 "(no subject) · No recipients
+    /// yet" drafts): a new message the person never wrote in — no recipients,
+    /// subject, text or attachments. A signature added by itself does not count.
+    /// Closing such a draft discards it; replies and forwards are always kept.
+    public var isUntouched: Bool {
+        guard kind == .new else { return false }
+        func blank(_ s: String?) -> Bool { (s ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let htmlText = htmlBody.map { $0.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&nbsp;", with: " ") }
+        return to.isEmpty && cc.isEmpty && bcc.isEmpty && blank(subject) && blank(plainBody) && blank(htmlText)
+            && attachments.isEmpty
+    }
+
     /// Moves the draft to another account. The chosen identity belonged to the
     /// old account, so it is cleared — the sender can never drift across accounts.
     public mutating func switchAccount(to account: UUID) {

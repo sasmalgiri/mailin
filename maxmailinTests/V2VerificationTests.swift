@@ -14099,5 +14099,10 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(named("Label(\"Import\", systemImage: \"square.and.arrow.down\")", in: try source("ContentView.swift")), "Import on the main list, named")
         XCTAssertTrue(named("Label(\"Import\", systemImage: \"square.and.arrow.down\")", in: try source("ArchiveSidebar.swift")))
         XCTAssertEqual(try source("ParsedEmailListView.swift").components(separatedBy: "SearchOperatorsHelpButton()").count - 1, 2, "operators on the Mac and iPhone bars")
+        // DRAFT-01: Close discards an untouched new message; empty drafts can be cleared with their count shown.
+        let composer = try source("MailComposeViews.swift")
+        XCTAssertTrue(composer.contains("Button(String(localized: \"Close\")) { Task { await closeDraft() } }"))
+        XCTAssertTrue(composer.contains("if let d = draft, d.isUntouched"))
+        XCTAssertTrue(composer.contains("confirmationDialog(String(localized: \"Delete \\(emptyDrafts.count) empty drafts?\")"))
     }
 }

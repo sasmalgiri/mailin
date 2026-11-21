@@ -533,4 +533,27 @@ final class DraftComposeTests: XCTestCase {
         let forward = ReplyBuilder.forwardAsAttachment(source, accountID: UUID(), identities: [])
         XCTAssertEqual(forward.attachments.first?.data, payload.data)
     }
+
+    // MARK: DRAFT-01
+
+    /// A new message nobody wrote in is "untouched" (discarded on Close); any
+    /// recipient, subject, text or a reply's quote keeps it.
+    func testUntouchedDraft_onlyAnEmptyNewMessage() throws {
+        let account = UUID()
+        var draft = Draft(accountID: account)
+        XCTAssertTrue(draft.isUntouched)
+        draft.htmlBody = "<p>&nbsp;</p>"
+        XCTAssertTrue(draft.isUntouched, "an empty editor's HTML is still empty")
+        draft.subject = "Hi"
+        XCTAssertFalse(draft.isUntouched)
+        draft.subject = "  "
+        draft.plainBody = "text"
+        XCTAssertFalse(draft.isUntouched)
+        draft.plainBody = ""
+        draft.to = [MailAddress(localPart: "a", domain: "x.org")]
+        XCTAssertFalse(draft.isUntouched)
+        let reply = Draft(accountID: account, kind: .reply)
+        XCTAssertFalse(reply.isUntouched, "a reply is never discarded silently")
+    }
 }
+

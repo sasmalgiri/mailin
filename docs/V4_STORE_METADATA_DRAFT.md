@@ -74,8 +74,13 @@ LIVE MAIL — THE FIVE JOBS NOW WORK ON YOUR LIVE MAIL TOO
 • Remove an account and keep its mail, or delete it too — counts first, then progress.
 • Gmail connects with a Google app password; Outlook with Microsoft's own sign-in.
 
+FASTER IMPORT
+• Large mailboxes import several times faster: mailbox files are read in parallel and duplicates are sorted out after everything is saved. On by default; switch it off for any single import in the import window.
+
 ALSO NEW
-• Advanced Search is now in every plan.
+• Advanced Search is now in every plan — and one click away beside the search box (⌥⇧⌘F), with a Whole words option and a list of the search operators.
+• New Message from any page (⌥⌘N).
+• Long emails print in full on every page; every date shows its year; the date range and counts always describe the whole list.
 • Recipes show what they found and what they changed.
 
 (About 1,150 characters, under the 4,000 limit. Translations: the owner pastes the English or uses App Store Connect's per-language fields; the app itself is in 10 languages.)

@@ -24,11 +24,21 @@ import UniformTypeIdentifiers
 struct MailDraftsList: View {
     let model: MailWorkspaceModel
     @Binding var sheet: MailSheet?
+    @State private var confirmEmptyCleanup = false
+
+    /// DRAFT-01: drafts left empty before Close discarded them.
+    private var emptyDrafts: [Draft] { model.drafts.filter(\.isUntouched) }
 
     var body: some View {
         List {
             if model.drafts.isEmpty {
                 Text("No drafts.").foregroundStyle(.secondary)
+            }
+            if !emptyDrafts.isEmpty {
+                Button(role: .destructive) { confirmEmptyCleanup = true } label: {
+                    Label(String(localized: "Delete \(emptyDrafts.count) empty drafts"), systemImage: "trash")
+                }
+                .accessibilityIdentifier("mail.drafts.deleteEmpty")
             }
             if model.unreadableDrafts > 0 {
                 Label(String(localized: "\(model.unreadableDrafts) drafts could not be read"), systemImage: "exclamationmark.triangle")
@@ -61,6 +71,19 @@ struct MailDraftsList: View {
             }
         }
         .navigationTitle(String(localized: "Drafts"))
+        // Rule 4: the count before the action; only drafts with nothing in them.
+        .confirmationDialog(String(localized: "Delete \(emptyDrafts.count) empty drafts?"), isPresented: $confirmEmptyCleanup,
+                            titleVisibility: .visible) {
+            Button(String(localized: "Delete \(emptyDrafts.count) empty drafts"), role: .destructive) {
+                let ids = emptyDrafts.map(\.id)
+                Task {
+                    for id in ids { await model.run { try await model.backend.discardDraft(id) } }
+                    await model.reloadDrafts()
+                }
+            }
+        } message: {
+            Text("They have no recipients, subject, text or attachments. Drafts with anything in them are kept.")
+        }
     }
 }
 
@@ -108,7 +131,7 @@ struct MailComposeSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(String(localized: "Close")) { Task { await saveNow(); dismiss() } }
+                    Button(String(localized: "Close")) { Task { await closeDraft() } }
                         .help(String(localized: "Keeps the draft"))
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -561,6 +584,19 @@ struct MailComposeSheet: View {
             guard !Task.isCancelled else { return }
             await saveNow()
         }
+    }
+
+    /// DRAFT-01: an untouched new message is discarded on Close, not kept as an
+    /// empty "(no subject)" draft; anything with content is saved as before.
+    private func closeDraft() async {
+        saveTask?.cancel()
+        if let d = draft, d.isUntouched {
+            try? await model.backend.discardDraft(d.id)
+            await model.reloadDrafts()
+        } else {
+            await saveNow()
+        }
+        dismiss()
     }
 
     private func saveNow() async {
