@@ -229,7 +229,10 @@ private struct MailWorkspaceReadyView: View {
     private var toolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button { Task { await newDraft() } } label: {
+                // WORD-03 (owner 2026-11-21): named, not the pencil alone —
+                // a toolbar shows only the icon unless told otherwise.
                 Label(String(localized: "Compose"), systemImage: "square.and.pencil")
+                    .labelStyle(.titleAndIcon)
             }
             .disabled(!model.actions.contains(.compose))
             .help(model.actions.contains(.compose) ? String(localized: "New message") : String(localized: "Turn on Send mail for an account to compose"))

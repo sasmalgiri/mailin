@@ -14078,5 +14078,9 @@ final class DeepDiveAppFixesTests: XCTestCase {
         let bar = try source("AdvancedSearchView.swift")
         XCTAssertTrue(bar.contains("Label(\"Advanced Search\", systemImage: \"text.magnifyingglass\")"), "named on the Mac bar, not an icon alone")
         XCTAssertTrue(try source("ParsedEmailListView.swift").contains("ListSearchOptions(model: model)"), "on the main list's bar")
+        // WORD-03: Compose is named in the mail toolbar too.
+        let mail = try source("MailWorkspaceView.swift")
+        let compose = try XCTUnwrap(mail.range(of: "Label(String(localized: \"Compose\"), systemImage: \"square.and.pencil\")"))
+        XCTAssertTrue(mail[compose.upperBound...].prefix(120).contains(".labelStyle(.titleAndIcon)"), "Compose shows its name, not the pencil alone")
     }
 }
