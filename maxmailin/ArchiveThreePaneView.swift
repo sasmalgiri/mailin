@@ -124,6 +124,7 @@ struct ArchiveThreePaneView: View {
                         ToolbarItem {
                             Button { showAdvancedSearch = true } label: {
                                 Label("Advanced Search", systemImage: "line.3.horizontal.decrease.circle")
+                                    .labelStyle(.titleAndIcon)   // WORD-03: named
                             }
                             .help("Build a search from conditions: all / any / exclude, dates, attachments")
                             .accessibilityIdentifier("archive.list.advancedSearch")
@@ -141,6 +142,7 @@ struct ArchiveThreePaneView: View {
                     ToolbarItem {
                         Button { showRecipes = true } label: {
                             Label("Recipes", systemImage: "checklist")
+                                .labelStyle(.titleAndIcon)   // WORD-03: named
                         }
                         .help("Five practical recipes: find and export, save attachments, clean up duplicates, back up and restore, collect and hand over")
                         .accessibilityIdentifier("archive.list.recipes")

@@ -245,6 +245,7 @@ private struct MailWorkspaceReadyView: View {
                         .accessibilityLabel(Text("Saving mail"))
                 } else {
                     Label(String(localized: "Sync now"), systemImage: "arrow.triangle.2.circlepath")
+                        .labelStyle(.titleAndIcon)   // WORD-03: named
                 }
             }
             .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
@@ -254,6 +255,7 @@ private struct MailWorkspaceReadyView: View {
 
             Button { sheet = .addAccount } label: {
                 Label(String(localized: "Add account"), systemImage: "person.crop.circle.badge.plus")
+                    .labelStyle(.titleAndIcon)   // WORD-03: named
             }
             .keyboardShortcut("a", modifiers: [.command, .option])
             .accessibilityIdentifier("mail.addAccount")

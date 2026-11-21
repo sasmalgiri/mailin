@@ -14082,5 +14082,14 @@ final class DeepDiveAppFixesTests: XCTestCase {
         let mail = try source("MailWorkspaceView.swift")
         let compose = try XCTUnwrap(mail.range(of: "Label(String(localized: \"Compose\"), systemImage: \"square.and.pencil\")"))
         XCTAssertTrue(mail[compose.upperBound...].prefix(120).contains(".labelStyle(.titleAndIcon)"), "Compose shows its name, not the pencil alone")
+        // WORD-03 follow-up: the other main toolbar actions are named as well.
+        func named(_ label: String, in text: String) -> Bool {
+            text.components(separatedBy: label).dropFirst().contains { $0.prefix(120).contains(".labelStyle(.titleAndIcon)") }
+        }
+        XCTAssertTrue(named("Label(String(localized: \"Sync now\")", in: mail))
+        XCTAssertTrue(named("Label(String(localized: \"Add account\")", in: mail))
+        let shell = try source("ArchiveThreePaneView.swift")
+        XCTAssertTrue(named("Label(\"Advanced Search\"", in: shell))
+        XCTAssertTrue(named("Label(\"Recipes\"", in: shell))
     }
 }
