@@ -182,6 +182,9 @@ struct CommandPaletteView: View {
             PaletteCommand(name: String(localized: "Guided Search"), icon: "questionmark.circle", shortcut: nil, category: "View") {
                 execute("guidedSearch")
             },
+            PaletteCommand(name: String(localized: "Advanced Search"), icon: "text.magnifyingglass", shortcut: "\u{2325}\u{21E7}\u{2318}F", category: "View") {
+                execute("advancedSearch")
+            },
         ]
     }
 

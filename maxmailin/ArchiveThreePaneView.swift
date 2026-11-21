@@ -33,6 +33,7 @@ struct ArchiveThreePaneView: View {
     @State private var spec: SearchSpec?
     /// WORD-01: the typed words match whole words only (shared with the main list).
     @AppStorage(ParsedEmailListViewModel.wholeWordsKey) private var wholeWords = false
+    @Environment(AppStateManager.self) private var appState: AppStateManager?
     @State private var unresolved = 0
     @State private var showAdvancedSearch = false
     /// REC-06: the five practical recipes, beside Search.
@@ -106,6 +107,12 @@ struct ArchiveThreePaneView: View {
                     PracticalRecipesHome(scopeName: scopeDescription, currentSpec: spec,
                                          onOpenSpecialist: onHome.map { home in { showRecipes = false; home() } },
                                          onClose: { showRecipes = false })
+                }
+                // WORD-01: Edit ▸ Advanced Search… (⌥⇧⌘F) and ⌘K.
+                .onChange(of: appState?.triggerAdvancedSearch ?? false, initial: true) { _, requested in
+                    guard requested, modules?.isOn(.searchQueryModel) ?? true else { return }
+                    appState?.triggerAdvancedSearch = false
+                    showAdvancedSearch = true
                 }
                 .sheet(isPresented: $showAdvancedSearch) {
                     AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,

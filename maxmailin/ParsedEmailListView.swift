@@ -366,6 +366,12 @@ struct ParsedEmailListView: View {
                 Button { model.groupByThread.toggle() } label: {
                     Label(model.groupByThread ? String(localized: "Ungroup Threads") : String(localized: "Group by Thread"), systemImage: "bubble.left.and.bubble.right")
                 }
+                // WORD-01: named here too — the bar shows only its icon on iPhone.
+                if modules.isOn(.searchQueryModel) {
+                    Button { model.showAdvancedSearch = true } label: {
+                        Label("Advanced Search…", systemImage: "text.magnifyingglass")
+                    }
+                }
                 Divider()
                 ForEach(ParsedEmailListViewModel.SortOption.allCases, id: \.self) { option in
                     Button {

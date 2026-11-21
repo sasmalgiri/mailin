@@ -528,6 +528,14 @@ struct mailinApp: App {
             .menuShortcut(MenuShortcutPolicy.find)   // IPAD-10: iPadOS owns ⌘F
             .disabled(!appState.hasParsedEmails)
 
+            // WORD-01 (owner 2026-11-21): Advanced Search was reachable only
+            // from the Simple list's toolbar; now from every list.
+            Button("Advanced Search…") {
+                appState.triggerAdvancedSearch = true
+            }
+            .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+            .disabled(!appState.hasParsedEmails)
+
             Button("Select All") {
                 appState.triggerSelectAll = true
             }
@@ -1088,6 +1096,8 @@ class AppStateManager {
     var triggerAuditLogExport = false
     var triggerForensicCSVExport = false
     var triggerSearch = false
+    /// WORD-01: Edit ▸ Advanced Search… / ⌘K — the list on screen opens its builder.
+    var triggerAdvancedSearch = false
     var triggerSelectAll = false
     var triggerPrint = false
     var triggerNewImport = false

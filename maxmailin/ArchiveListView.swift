@@ -49,6 +49,7 @@ struct ArchiveListView: View {
     @State private var showAdvancedSearch = false
     /// WORD-01: the typed words match whole words only (shared with the main list).
     @AppStorage(ParsedEmailListViewModel.wholeWordsKey) private var wholeWords = false
+    @Environment(AppStateManager.self) private var appState: AppStateManager?
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     init(archive: ArchiveDataService = .shared) {
@@ -74,6 +75,12 @@ struct ArchiveListView: View {
             }
                 .navigationTitle("Archive")
                 .searchable(text: $searchText, prompt: "Search subject, sender, body…")
+                // WORD-01: Edit ▸ Advanced Search… (⌥⇧⌘F) and ⌘K.
+                .onChange(of: appState?.triggerAdvancedSearch ?? false, initial: true) { _, requested in
+                    guard requested, modules?.isOn(.searchQueryModel) ?? true else { return }
+                    appState?.triggerAdvancedSearch = false
+                    showAdvancedSearch = true
+                }
                 .sheet(isPresented: $showAdvancedSearch) {
                     AdvancedSearchView(applied: spec, scopeDescription: scopeDescription,
                                        onApply: { newSpec in spec = newSpec; showAdvancedSearch = false; scheduleQuery(immediately: true) },

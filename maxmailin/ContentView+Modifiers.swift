@@ -963,6 +963,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
         case "iocExtractor":
             if storeManager.requireProfessional() { appState.showIOCExtractor = true }
         case "guidedSearch": appState.showGuidedSearch = true
+        case "advancedSearch": appState.triggerAdvancedSearch = true
         default: break
         }
     }

@@ -483,9 +483,16 @@ struct ListSearchOptions: View {
                 .accessibilityIdentifier("list.search.wholeWords")
 
                 Button { model.showAdvancedSearch = true } label: {
+                    #if os(macOS)
+                    // Named, not an icon alone: the owner could not find it.
+                    Label("Advanced Search", systemImage: "text.magnifyingglass")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption)
+                    #else
                     Image(systemName: "text.magnifyingglass")
-                        .foregroundStyle(model.advancedSpec?.isEmpty == false ? AppColors.primary : AppColors.secondary)
+                    #endif
                 }
+                .foregroundStyle(model.advancedSpec?.isEmpty == false ? AppColors.primary : AppColors.secondary)
                 .buttonStyle(.plain)
                 .help("Build a search from conditions: all / any / exclude, dates, attachments")
                 .accessibilityLabel(String(localized: "Advanced Search"))
@@ -499,6 +506,7 @@ struct ListSearchOptions: View {
 /// the conditions as chips, Edit and Clear — and the builder sheet.
 struct ListAppliedAdvancedSearch: View {
     @ObservedObject var model: ParsedEmailListViewModel
+    @Environment(AppStateManager.self) private var appState
 
     private var scopeDescription: String {
         ArchiveThreePaneView.describeScope(title: String(localized: "This list, with its filters and dates"), dateScope: .all,
@@ -517,6 +525,12 @@ struct ListAppliedAdvancedSearch: View {
             AdvancedSearchView(applied: model.advancedSpec, scopeDescription: scopeDescription,
                                onApply: { newSpec in model.advancedSpec = newSpec; model.showAdvancedSearch = false },
                                onCancel: { model.showAdvancedSearch = false })
+        }
+        // Edit ▸ Advanced Search… (⌥⇧⌘F) and ⌘K reach this list's builder.
+        .onChange(of: appState.triggerAdvancedSearch, initial: true) { _, requested in
+            guard requested else { return }
+            appState.triggerAdvancedSearch = false
+            model.showAdvancedSearch = true
         }
     }
 }

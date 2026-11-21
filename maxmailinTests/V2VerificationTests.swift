@@ -14055,4 +14055,28 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertNil(vm.advancedSpec)
         XCTAssertTrue(vm.wholeWordSearch)
     }
+
+    /// WORD-01 follow-up (owner: "in ui i have not seen any where"): Advanced
+    /// Search is named on the main list's bar, in Edit ▸ Advanced Search…
+    /// (⌥⇧⌘F) and in ⌘K, and every list that can show it answers the command.
+    func testAdvancedSearch_isReachableFromTheMenuThePaletteAndEveryList() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin", isDirectory: true)
+        func source(_ name: String) throws -> String {
+            try String(contentsOf: app.appendingPathComponent(name), encoding: .utf8)
+        }
+        let menu = try source("mailinApp.swift")
+        XCTAssertTrue(menu.contains("Button(\"Advanced Search…\")") && menu.contains("appState.triggerAdvancedSearch = true"),
+                      "Edit menu: Advanced Search…")
+        XCTAssertTrue(menu.contains(".keyboardShortcut(\"f\", modifiers: [.command, .option, .shift])"), "⌥⇧⌘F")
+        let palette = try source("CommandPaletteView.swift")
+        XCTAssertTrue(palette.contains("execute(\"advancedSearch\")"), "⌘K offers it")
+        XCTAssertTrue(try source("ContentView+Modifiers.swift").contains("case \"advancedSearch\": appState.triggerAdvancedSearch = true"))
+        for list in ["AdvancedSearchView.swift", "ArchiveThreePaneView.swift", "ArchiveListView.swift"] {
+            XCTAssertTrue(try source(list).contains("triggerAdvancedSearch = false"), "\(list) answers the command")
+        }
+        let bar = try source("AdvancedSearchView.swift")
+        XCTAssertTrue(bar.contains("Label(\"Advanced Search\", systemImage: \"text.magnifyingglass\")"), "named on the Mac bar, not an icon alone")
+        XCTAssertTrue(try source("ParsedEmailListView.swift").contains("ListSearchOptions(model: model)"), "on the main list's bar")
+    }
 }
