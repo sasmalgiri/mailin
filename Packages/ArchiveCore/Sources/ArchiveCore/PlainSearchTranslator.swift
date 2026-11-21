@@ -18,6 +18,12 @@
 //    (operators only in capitals; lower-case and/or/not are words — D-6)
 //    in:attachments   the words must be inside one attachment's text
 //
+//  WORD-01 (owner 2026-11-21): "Whole words" — an option beside the box, off
+//  by default. On, the last word is a whole word too ("merger" no longer
+//  finds "mergers", "skill" no longer "Skilling"); off, it matches the start
+//  of a word, as typed so far.
+//  Quoted phrases are the exact text either way.
+//
 
 import Foundation
 
@@ -31,7 +37,7 @@ enum PlainSearchTranslator {
     }
 
     /// The typed text as a spec, or nil when there is nothing to search for.
-    static func spec(from raw: String) -> SearchSpec? {
+    static func spec(from raw: String, wholeWords: Bool = false) -> SearchSpec? {
         var tokens = ArchiveQueryCompiler.tokenize(raw)
         let inAttachments = tokens.contains { attachmentsOperators.contains($0.lowercased()) }
         tokens.removeAll { attachmentsOperators.contains($0.lowercased()) }
@@ -71,7 +77,7 @@ enum PlainSearchTranslator {
         var groups: [SearchGroup] = []
 
         if positives.count == 1 {
-            groups.append(group(.all, terms: positives[0], lastIsPrefix: true, inAttachments: inAttachments))
+            groups.append(group(.all, terms: positives[0], lastIsPrefix: !wholeWords, inAttachments: inAttachments))
         } else if positives.count > 1 {
             // R01 (handoff 7481852): one "any" group whose branches ARE the
             // alternatives — each branch holds its phrases, its plain words
@@ -147,10 +153,11 @@ extension ArchiveBrowseState {
     /// the model is on) — the plain box and Advanced Search then share one
     /// engine, one coverage rule and one evidence path.
     func query(base: EmailQuery = .all, plainTextOnModel: Bool) -> EmailQuery {
+        // WORD-01: `wholeWords` changes only how the typed words are matched.
         var q = query(base: base)
         guard plainTextOnModel, SearchChunkPolicy.isEnabled,
               let text = q.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
-              let typed = PlainSearchTranslator.spec(from: text) else { return q }
+              let typed = PlainSearchTranslator.spec(from: text, wholeWords: wholeWords) else { return q }
         q.spec = PlainSearchTranslator.merge(typed, into: q.spec)
         q.text = nil
         return q

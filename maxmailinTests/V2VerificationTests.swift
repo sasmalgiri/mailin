@@ -14003,4 +14003,56 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertFalse(vm.isNarrowedWithinLoaded, "no in-window filter: the count is the list's")
         XCTAssertEqual(vm.displayedEmailCount, 60)
     }
+    /// WORD-01 (owner 2026-11-21): the main list gets "Whole words" (off by
+    /// default, remembered) and Advanced Search; the list's total follows both.
+    func testMainList_wholeWordsOption_andAdvancedSearch() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        let savedWhole = UserDefaults.standard.object(forKey: ParsedEmailListViewModel.wholeWordsKey)
+        defer {
+            SearchChunkPolicy.isEnabled = wasOn
+            UserDefaults.standard.set(savedWhole, forKey: ParsedEmailListViewModel.wholeWordsKey)
+        }
+        SearchChunkPolicy.isEnabled = true
+        UserDefaults.standard.removeObject(forKey: ParsedEmailListViewModel.wholeWordsKey)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("mailin-words-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store"))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts"))
+        let bodies = ["the merger closed", "two mergers", "the merger failed", "nothing here"]
+        let emails = bodies.enumerated().map { i, body in
+            MBOXParser.RawEmail(headers: ["Message-ID": "<ww\(i)@x>", "From": "a@x.com", "To": "b@x.com", "Subject": "W \(i)",
+                                          "Date": "Wed, 0\(i + 1) Jan 2025 14:30:00 +0000"],
+                                rawSource: "", messageType: "received", attachments: [],
+                                timestamp: "2025-01-0\(i + 1)T14:30:00Z", domains: ["x.com"], plainBody: body, htmlBody: "")
+        }
+        try await store.insertBatch(emails, batchSize: 100)
+        try await fts.indexBatch(emails)
+        let archive = ArchiveDataService(repository: EmailStoreRepository(store: store, fts: fts))
+        let vm = ParsedEmailListViewModel(viewModel: ContentViewModel(), archive: archive, pageSize: 10, maxRetained: 20)
+        vm.isPremiumUser = true
+
+        XCTAssertFalse(vm.wholeWordSearch, "off by default")
+        vm.searchText = "merger"
+        await vm.reloadForQueryChangeNow()
+        XCTAssertEqual(vm.queryTotalCount, 3, "off: mergers matches too")
+
+        // The switch reloads the list by itself; let that reload finish.
+        func settle() async { await Task.yield(); await vm.reloadForQueryChangeNow() }
+        vm.wholeWordSearch = true
+        await settle()
+        XCTAssertEqual(vm.queryTotalCount, 2, "on: whole words only")
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: ParsedEmailListViewModel.wholeWordsKey), "remembered")
+
+        // Advanced Search on this list: its conditions narrow the same list.
+        vm.searchText = ""
+        vm.advancedSpec = SearchSpec(groups: [SearchGroup(.all, [SearchCondition(.anyText, .allWords, "failed")])])
+        await settle()
+        XCTAssertEqual(vm.queryTotalCount, 1)
+        XCTAssertEqual(vm.currentArchiveQuery.spec, vm.advancedSpec)
+
+        // Clearing the filters removes the conditions and keeps the option.
+        vm.resetFilters()
+        XCTAssertNil(vm.advancedSpec)
+        XCTAssertTrue(vm.wholeWordSearch)
+    }
 }

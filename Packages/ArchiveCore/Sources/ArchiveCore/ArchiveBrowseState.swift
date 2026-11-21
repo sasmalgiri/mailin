@@ -29,6 +29,8 @@ struct ArchiveBrowseState: Equatable, Sendable {
     /// FIND-04: the Advanced Search model applied on top of the scope. It
     /// rides on the query, so scope (the sidebar's base) stays outside it.
     var spec: SearchSpec? = nil
+    /// WORD-01: the typed words match whole words only (search model).
+    var wholeWords: Bool = false
 
     /// The archive-wide query: `base` carries the surface's own extra
     /// predicates; this state's fields are applied on top, then the search

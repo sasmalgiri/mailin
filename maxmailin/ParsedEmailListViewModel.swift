@@ -99,6 +99,21 @@ class ParsedEmailListViewModel: ObservableObject {
     @Published var selectedTags: [String] = []
     @Published var sortBy: SortOption = .dateDesc { didSet { rememberFilters() } }
     @Published var searchText: String = ""
+    /// WORD-01 (owner 2026-11-21): the typed words match whole words only
+    /// ("merger" not "mergers"). Off by default; remembered.
+    @Published var wholeWordSearch: Bool = UserDefaults.standard.bool(forKey: ParsedEmailListViewModel.wholeWordsKey) {
+        didSet {
+            UserDefaults.standard.set(wholeWordSearch, forKey: Self.wholeWordsKey)
+            if !isResettingFilters, oldValue != wholeWordSearch { applyFilters() }
+        }
+    }
+    nonisolated static let wholeWordsKey = "search.wholeWords"
+    /// WORD-01: Advanced Search on this list (it had none) — the same builder
+    /// and model as the three-pane shell, applied on top of the sidebar's filters.
+    @Published var showAdvancedSearch = false
+    @Published var advancedSpec: SearchSpec? = nil {
+        didSet { if !isResettingFilters, oldValue != advancedSpec { applyFilters() } }
+    }
     @Published var isSearchFocused: Bool = false
     @Published var selectedEvidenceTag: ForensicManager.EvidenceTag? = nil
     @Published var groupByThread: Bool = false {
@@ -480,7 +495,9 @@ class ParsedEmailListViewModel: ObservableObject {
                 case .sizeDesc: return .sizeDesc
                 case .priorityDesc: return .priorityDesc
                 }
-            }())
+            }(),
+            spec: advancedSpec,
+            wholeWords: wholeWordSearch)
     }
 
     /// This list's OWN predicates — sidebar selections, quick chips, review
@@ -605,7 +622,16 @@ class ParsedEmailListViewModel: ObservableObject {
     /// rows (set by the reload, shown through `searchNotice`).
     private var modelSearchNotice: String?
 
+    /// WORD-01: messages an applied Advanced Search may still match (their
+    /// text is not indexed yet) — shown under the conditions, as in the shell.
+    @Published var advancedUnresolved = 0
+
     private func refreshModelSearchNotice() async {
+        if let spec = advancedSpec, !spec.isEmpty {
+            advancedUnresolved = (try? await archive.unresolvedCount(query: currentArchiveQuery)) ?? 0
+        } else {
+            advancedUnresolved = 0
+        }
         // PERF-02: a total of 0 means "no rows" only once the count is in.
         guard typedSearchRunsOnModel, pager.totalsKnown, pager.totalCount == 0 else { modelSearchNotice = nil; return }
         modelSearchNotice = ModelSearchNotice.noMatch(coverage: await ModelSearchNotice.snapshot(archive: archive, scope: currentArchiveQuery))
@@ -1086,6 +1112,7 @@ class ParsedEmailListViewModel: ObservableObject {
         selectedSubjects.removeAll()
         selectedTags.removeAll()
         searchText = ""
+        advancedSpec = nil
         startDate = .distantPast
         endDate = .distantFuture
         minReplyCount = 0
@@ -1351,7 +1378,6 @@ class ParsedEmailListViewModel: ObservableObject {
         }
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let parsed = parseSearchQuery(query)
-        let isoFmt = isoFormatter
 
         let forensicEvidenceTags = ForensicManager.shared.evidenceTags
 

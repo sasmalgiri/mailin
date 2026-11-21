@@ -458,3 +458,65 @@ struct ConnectedAccountChoice: Hashable, Identifiable {
     let id: String
     let name: String
 }
+
+// MARK: - WORD-01: the main list's search options
+
+/// WORD-01 (owner 2026-11-21: "put an option of whole-word search … where is
+/// our advance search?"). The main email list had no Advanced Search — only the
+/// three-pane shell did. These sit in its search bar: "Whole words" (off by
+/// default) and the same Advanced Search builder. Shown while the search model
+/// answers the box (`searchQueryModel`); the previous search has neither.
+struct ListSearchOptions: View {
+    @ObservedObject var model: ParsedEmailListViewModel
+    @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
+
+    var body: some View {
+        if modules?.isOn(.searchQueryModel) ?? true, !model.isNaturalLanguageMode {
+            HStack(spacing: 6) {
+                Toggle(isOn: $model.wholeWordSearch) {
+                    Text("Whole words")
+                        .font(.caption2)
+                }
+                .toggleStyle(.button)
+                .controlSize(.mini)
+                .help("Match whole words only: “merger” does not find “mergers”. Off: the last word also matches longer words that start with it.")
+                .accessibilityIdentifier("list.search.wholeWords")
+
+                Button { model.showAdvancedSearch = true } label: {
+                    Image(systemName: "text.magnifyingglass")
+                        .foregroundStyle(model.advancedSpec?.isEmpty == false ? AppColors.primary : AppColors.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Build a search from conditions: all / any / exclude, dates, attachments")
+                .accessibilityLabel(String(localized: "Advanced Search"))
+                .accessibilityIdentifier("list.search.advanced")
+            }
+        }
+    }
+}
+
+/// WORD-01: the applied Advanced Search under the main list's search bar —
+/// the conditions as chips, Edit and Clear — and the builder sheet.
+struct ListAppliedAdvancedSearch: View {
+    @ObservedObject var model: ParsedEmailListViewModel
+
+    private var scopeDescription: String {
+        ArchiveThreePaneView.describeScope(title: String(localized: "This list, with its filters and dates"), dateScope: .all,
+                                           accessLimit: model.accessLimitedTotal != nil ? StoreManager.freeEmailLimit : nil)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let spec = model.advancedSpec, !spec.isEmpty {
+                ActiveFiltersBar(spec: spec, scopeDescription: scopeDescription, unresolved: model.advancedUnresolved,
+                                 onChange: { model.advancedSpec = $0 },
+                                 onEdit: { model.showAdvancedSearch = true })
+            }
+        }
+        .sheet(isPresented: $model.showAdvancedSearch) {
+            AdvancedSearchView(applied: model.advancedSpec, scopeDescription: scopeDescription,
+                               onApply: { newSpec in model.advancedSpec = newSpec; model.showAdvancedSearch = false },
+                               onCancel: { model.showAdvancedSearch = false })
+        }
+    }
+}

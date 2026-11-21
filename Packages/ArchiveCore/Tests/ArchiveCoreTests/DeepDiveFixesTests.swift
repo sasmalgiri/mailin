@@ -116,4 +116,48 @@ final class DeepDiveFixesTests: XCTestCase {
         let even = try await repository.attachmentTotal(query: EmailQuery(text: "even"))
         XCTAssertEqual(even, (0..<120).filter { $0 % 2 == 0 }.reduce(0) { $0 + $1 % 3 }, "a search counts its matches only")
     }
+
+    // MARK: WORD-01
+
+    /// The search box with "Whole words" on: a word matches only as a whole
+    /// word; off (the default), the last word matches the start of a word
+    /// (as typed so far) — never the inside of one.
+    func testWholeWords_option_matchesWholeWordsOnly_defaultStaysAsTyped() async throws {
+        let wasOn = SearchChunkPolicy.isEnabled
+        defer { SearchChunkPolicy.isEnabled = wasOn }
+        SearchChunkPolicy.isEnabled = true
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store3", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts3", isDirectory: true))
+        let bodies = ["the oil price", "water will boil", "the merger closed", "two mergers", "Jeff Skilling spoke", "new skills"]
+        let emails = bodies.enumerated().map { i, body in
+            MBOXParser.RawEmail(headers: ["Message-ID": "<w\(i)@x>", "From": "a@x.com", "To": "b@x.com",
+                                          "Subject": "Note \(i)", "Date": "Mon, 6 Jan 2025 10:00:00 +0000"],
+                                rawSource: "", messageType: "received", attachments: [],
+                                timestamp: "2025-01-06T10:00:00Z", domains: ["x.com"], plainBody: body, htmlBody: "")
+        }
+        try await store.insertBatch(emails, batchSize: 100)
+        try await fts.indexBatch(emails)
+        let repository = EmailStoreRepository(store: store, fts: fts)
+        func count(_ text: String, whole: Bool) async throws -> Int {
+            let q = ArchiveBrowseState(searchText: text, wholeWords: whole).query(plainTextOnModel: true)
+            XCTAssertNil(q.text, "the typed words run on the search model")
+            return try await repository.count(query: q)
+        }
+        let oilAsTyped = try await count("oil", whole: false)
+        XCTAssertEqual(oilAsTyped, 1, "never inside a word: boil does not match")
+        let mergerAsTyped = try await count("merger", whole: false)
+        let mergerWhole = try await count("merger", whole: true)
+        XCTAssertEqual(mergerAsTyped, 2, "default: the start of a word, so mergers matches")
+        XCTAssertEqual(mergerWhole, 1, "whole words: not mergers")
+        let skillAsTyped = try await count("skill", whole: false)
+        let skillWhole = try await count("skill", whole: true)
+        XCTAssertEqual(skillAsTyped, 2, "default: Skilling and skills")
+        XCTAssertEqual(skillWhole, 0, "whole words: neither")
+        let skillingWhole = try await count("skilling", whole: true)
+        XCTAssertEqual(skillingWhole, 1)
+        let twoWords = try await count("the merger", whole: true)
+        XCTAssertEqual(twoWords, 1)
+        let phrase = try await count("\"two mergers\"", whole: true)
+        XCTAssertEqual(phrase, 1, "a quoted phrase is the exact text")
+    }
 }

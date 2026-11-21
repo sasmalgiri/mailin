@@ -31,6 +31,8 @@ struct ArchiveThreePaneView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     // FIND-04: the applied Advanced Search and what could not be confirmed yet.
     @State private var spec: SearchSpec?
+    /// WORD-01: the typed words match whole words only (shared with the main list).
+    @AppStorage(ParsedEmailListViewModel.wholeWordsKey) private var wholeWords = false
     @State private var unresolved = 0
     @State private var showAdvancedSearch = false
     /// REC-06: the five practical recipes, beside Search.
@@ -118,6 +120,15 @@ struct ArchiveThreePaneView: View {
                             }
                             .help("Build a search from conditions: all / any / exclude, dates, attachments")
                             .accessibilityIdentifier("archive.list.advancedSearch")
+                        }
+                    }
+                    if modules?.isOn(.searchQueryModel) ?? false {
+                        ToolbarItem {
+                            Toggle(isOn: $wholeWords) { Text("Whole words") }
+                                .toggleStyle(.button)
+                                .help("Match whole words only: “merger” does not find “mergers”. Off: the last word also matches longer words that start with it.")
+                                .accessibilityIdentifier("archive.list.wholeWords")
+                                .onChange(of: wholeWords) { _, _ in Task { await applyQuery() } }
                         }
                     }
                     ToolbarItem {
@@ -236,7 +247,7 @@ struct ArchiveThreePaneView: View {
         // CAP-01 / FIND-04: with the search model on, the typed words run on
         // the model too (same engine, coverage and evidence as Advanced
         // Search, no candidate window); otherwise the previous text path.
-        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after, spec: spec)
+        let query = ArchiveBrowseState(searchText: text, afterDate: scope.after, spec: spec, wholeWords: wholeWords)
             .query(base: base, plainTextOnModel: modules?.isOn(.searchQueryModel) ?? false)
         await model.setQuery(query)
         if let applied = query.spec, !applied.isEmpty {

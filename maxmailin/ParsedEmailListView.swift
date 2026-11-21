@@ -343,6 +343,8 @@ struct ParsedEmailListView: View {
             .background(Color(.tertiarySystemFill))
             .cornerRadius(10)
 
+            ListSearchOptions(model: model)
+
             Button {
                 withAnimation { showIOSFilters.toggle() }
             } label: {
@@ -407,6 +409,8 @@ struct ParsedEmailListView: View {
             .accessibilityLabel(String(localized: "List actions"))
             .accessibilityHint(String(localized: "Sort, group, export and reports for the emails in the list."))
         }
+
+        ListAppliedAdvancedSearch(model: model)
 
         // Part P: user-visible search caveats — never silently truncated.
         if let notice = model.searchNotice {
@@ -770,6 +774,8 @@ struct ParsedEmailListView: View {
                 .accessibilityLabel(model.isNaturalLanguageMode ? String(localized: "Natural language mode active") : String(localized: "Enable natural language mode"))
                 }
 
+                ListSearchOptions(model: model)
+
                 if !model.searchText.isEmpty {
                     Button {
                         showSaveSearchAlert = true
@@ -829,6 +835,9 @@ struct ParsedEmailListView: View {
             .padding(.horizontal, Spacing.small)
             .padding(.vertical, Spacing.xxSmall)
             .adaptiveGlass(in: RoundedRectangle(cornerRadius: CornerRadius.medium))
+
+            ListAppliedAdvancedSearch(model: model)
+                .padding(.horizontal, Spacing.small)
 
             // S0: an absent search hit must never be indistinguishable from
             // "that phrase is not in the archive". Renders nothing when

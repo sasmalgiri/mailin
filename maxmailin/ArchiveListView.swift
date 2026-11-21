@@ -47,6 +47,8 @@ struct ArchiveListView: View {
     @State private var spec: SearchSpec?
     @State private var unresolved = 0
     @State private var showAdvancedSearch = false
+    /// WORD-01: the typed words match whole words only (shared with the main list).
+    @AppStorage(ParsedEmailListViewModel.wholeWordsKey) private var wholeWords = false
     @Environment(ModuleRegistry.self) private var modules: ModuleRegistry?
 
     init(archive: ArchiveDataService = .shared) {
@@ -85,6 +87,15 @@ struct ArchiveListView: View {
                             }
                             .help("Build a search from conditions: all / any / exclude, dates, attachments")
                             .accessibilityIdentifier("archive.list.advancedSearch")
+                        }
+                    }
+                    if modules?.isOn(.searchQueryModel) ?? true {
+                        ToolbarItem {
+                            Toggle(isOn: $wholeWords) { Text("Whole words") }
+                                .toggleStyle(.button)
+                                .help("Match whole words only: “merger” does not find “mergers”. Off: the last word also matches longer words that start with it.")
+                                .accessibilityIdentifier("archive.list.wholeWords")
+                                .onChange(of: wholeWords) { _, _ in scheduleQuery(immediately: true) }
                         }
                     }
                     ToolbarItem {
@@ -140,7 +151,7 @@ struct ArchiveListView: View {
             // `from:alice` or `filename:pdf` means the same thing here.
             // IPAD-03 / CAP-01: on the search model when it is on (the policy is
             // the `searchQueryModel` switch), as the three-pane shell and the full list.
-            let query = ArchiveBrowseState(searchText: text, afterDate: after, spec: applied).query(plainTextOnModel: true)
+            let query = ArchiveBrowseState(searchText: text, afterDate: after, spec: applied, wholeWords: wholeWords).query(plainTextOnModel: true)
             await model.setQuery(query)
             if let s = query.spec, !s.isEmpty {
                 unresolved = (try? await model.archive.unresolvedCount(query: query)) ?? 0
