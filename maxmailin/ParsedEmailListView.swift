@@ -327,6 +327,7 @@ struct ParsedEmailListView: View {
                     .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
                         if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
                     }
+                if !model.isNaturalLanguageMode { SearchOperatorsHelpButton() }   // WORD-04
                 if !model.searchText.isEmpty {
                     Button {
                         model.searchText = ""
@@ -752,6 +753,8 @@ struct ParsedEmailListView: View {
                     .onChange(of: modules.isEnabled(.aiInsights), initial: true) { _, aiOn in
                         if !aiOn && model.isNaturalLanguageMode { model.isNaturalLanguageMode = false }
                     }
+
+                if !model.isNaturalLanguageMode { SearchOperatorsHelpButton() }   // WORD-04
 
                 if modules.isEnabled(.aiInsights) {
                 Button {

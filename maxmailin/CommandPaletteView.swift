@@ -58,6 +58,7 @@ struct CommandPaletteView: View {
         "Investigation Report": .professional,
         "Report Builder": .professional,
         "IOC Extractor": .professional,
+        "New Message": .liveMail,
     ]
 
     private func isOffered(_ command: PaletteCommand) -> Bool {
@@ -184,6 +185,9 @@ struct CommandPaletteView: View {
             },
             PaletteCommand(name: String(localized: "Advanced Search"), icon: "text.magnifyingglass", shortcut: "\u{2325}\u{21E7}\u{2318}F", category: "View") {
                 execute("advancedSearch")
+            },
+            PaletteCommand(name: String(localized: "New Message"), icon: "square.and.pencil", shortcut: "\u{2325}\u{2318}N", category: "View") {
+                execute("newMessage")
             },
         ]
     }

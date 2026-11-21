@@ -964,6 +964,7 @@ struct V9UtilitySheetsModifier: ViewModifier {
             if storeManager.requireProfessional() { appState.showIOCExtractor = true }
         case "guidedSearch": appState.showGuidedSearch = true
         case "advancedSearch": appState.triggerAdvancedSearch = true
+        case "newMessage": appState.triggerCompose = true
         default: break
         }
     }

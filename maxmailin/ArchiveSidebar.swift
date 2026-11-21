@@ -486,6 +486,7 @@ struct ArchiveSidebarView: View {
                 ToolbarItem(placement: .automatic) {
                     Button(action: onImport) {
                         Label("Import", systemImage: "square.and.arrow.down")
+                            .labelStyle(.titleAndIcon)   // WORD-04: named
                     }
                     .help("Import a mailbox file or folder (⌘O)")
                     .accessibilityIdentifier("archive.sidebar.import")

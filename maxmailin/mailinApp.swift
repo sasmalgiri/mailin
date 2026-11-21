@@ -459,6 +459,15 @@ struct mailinApp: App {
             }
             .keyboardShortcut("n", modifiers: .command)
 
+            // WORD-04 (owner 2026-11-21): compose from any page, not only the
+            // Mail toolbar. Not offered where the build has no Mail page.
+            if modules.shippedModules.contains(.liveMail) {
+                Button("New Message") {
+                    appState.triggerCompose = true
+                }
+                .keyboardShortcut("n", modifiers: [.command, .option])
+            }
+
             Button("Open Email Archive...") {
                 appState.triggerFileImport = true
             }
@@ -1098,6 +1107,8 @@ class AppStateManager {
     var triggerSearch = false
     /// WORD-01: Edit ▸ Advanced Search… / ⌘K — the list on screen opens its builder.
     var triggerAdvancedSearch = false
+    /// WORD-04: File ▸ New Message / ⌘K — the shell opens Mail, Mail opens a draft.
+    var triggerCompose = false
     var triggerSelectAll = false
     var triggerPrint = false
     var triggerNewImport = false

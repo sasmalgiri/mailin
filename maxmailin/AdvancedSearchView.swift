@@ -534,3 +534,62 @@ struct ListAppliedAdvancedSearch: View {
         }
     }
 }
+
+// MARK: - WORD-04: the search box's operators, shown on request
+
+/// WORD-04 (owner 2026-11-21): the box understands operators, but they were
+/// only in a hover tooltip. A "?" beside the box lists them with examples.
+/// The operators themselves stay as typed (English, OR / NOT in capitals).
+struct SearchOperatorsHelpButton: View {
+    @State private var showing = false
+
+    private static let rows: [(example: String, meaning: LocalizedStringKey)] = [
+        ("from:anna", "From this sender"),
+        ("to:anna", "To this recipient"),
+        ("subject:invoice", "In the subject"),
+        ("\"exact phrase\"", "These words, in this order"),
+        ("budget OR forecast", "Either word"),
+        ("NOT draft   -draft", "Leave these out"),
+        ("has:attachment", "Has attachments"),
+        ("in:attachments budget", "Inside attachments"),
+        ("after:2024-01-01 before:2024-02-01", "From a day / before a day"),
+        ("/inv[0-9]+/", "A pattern (regular expression)"),
+    ]
+
+    var body: some View {
+        Button { showing.toggle() } label: {
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(AppColors.secondary)
+        }
+        .buttonStyle(.plain)
+        .help("Search operators")
+        .accessibilityLabel(String(localized: "Search operators"))
+        .accessibilityIdentifier("list.search.operators")
+        .popover(isPresented: $showing, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Search operators")
+                    .font(.headline)
+                Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
+                    ForEach(Self.rows, id: \.example) { row in
+                        GridRow {
+                            Text(verbatim: row.example)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                            Text(row.meaning)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                Text("Type them as shown: OR and NOT in capitals. Combine as many as you like.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+            .frame(minWidth: 320)
+            .presentationCompactAdaptation(.popover)
+        }
+    }
+}
+

@@ -73,6 +73,7 @@ final class PageRouter {
 
 struct FourPageShell: View {
     @Environment(ModuleRegistry.self) private var modules
+    @Environment(AppStateManager.self) private var appState: AppStateManager?
     @EnvironmentObject private var storeManager: StoreManager
     @State private var router = PageRouter()
     /// Back / Forward across pages and their sections (NavigationHistory.swift).
@@ -133,6 +134,17 @@ struct FourPageShell: View {
                 .clipped()
         }
         .environment(\.navigationHistory, history)
+        // WORD-04: New Message from any page opens Mail (or asks to turn it on);
+        // the Mail page then opens the draft and clears the request.
+        .onChange(of: appState?.triggerCompose ?? false) { _, requested in
+            guard requested else { return }
+            if modules.isEnabled(.liveMail) {
+                router.select(.liveMail, in: modules)
+            } else {
+                appState?.triggerCompose = false
+                pendingActivation = .liveMail
+            }
+        }
         .onAppear {
             // Before any 3.0 engine can run: trip engines the last process
             // stopped inside, and decide whether this launch is Safe Mode.

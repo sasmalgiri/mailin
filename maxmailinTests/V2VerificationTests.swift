@@ -14091,5 +14091,13 @@ final class DeepDiveAppFixesTests: XCTestCase {
         let shell = try source("ArchiveThreePaneView.swift")
         XCTAssertTrue(named("Label(\"Advanced Search\"", in: shell))
         XCTAssertTrue(named("Label(\"Recipes\"", in: shell))
+        // WORD-04: New Message from any page, Import named, operators listed.
+        XCTAssertTrue(menu.contains("Button(\"New Message\")") && menu.contains("appState.triggerCompose = true"), "File ▸ New Message")
+        XCTAssertTrue(palette.contains("execute(\"newMessage\")"), "⌘K New Message")
+        XCTAssertTrue(try source("FourPageShell.swift").contains("router.select(.liveMail, in: modules)"), "the shell opens Mail")
+        XCTAssertTrue(mail.contains("answerComposeRequest()"), "Mail opens the draft")
+        XCTAssertTrue(named("Label(\"Import\", systemImage: \"square.and.arrow.down\")", in: try source("ContentView.swift")), "Import on the main list, named")
+        XCTAssertTrue(named("Label(\"Import\", systemImage: \"square.and.arrow.down\")", in: try source("ArchiveSidebar.swift")))
+        XCTAssertEqual(try source("ParsedEmailListView.swift").components(separatedBy: "SearchOperatorsHelpButton()").count - 1, 2, "operators on the Mac and iPhone bars")
     }
 }

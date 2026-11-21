@@ -24,8 +24,28 @@ import SwiftUI
 
 struct MailWorkspaceView: View {
     @Environment(ModuleRegistry.self) private var modules
+    @Environment(AppStateManager.self) private var appState: AppStateManager?
     @State private var model = MailWorkspaceModel(backend: ConnectedMailBackend.current())
     @State private var sheet: MailSheet?
+
+    /// WORD-04: File ▸ New Message (⌥⌘N) or ⌘K "New Message" — a new draft
+    /// for the first account that may send; otherwise say what to turn on.
+    private func answerComposeRequest() {
+        guard let appState, appState.triggerCompose else { return }
+        appState.triggerCompose = false
+        guard model.availability == .ready else { return }   // the page explains why
+        guard let account = model.accounts.first(where: { $0.account.enabledModes.contains(.send) }) else {
+            model.message = String(localized: "Turn on Send mail for an account to compose")
+            return
+        }
+        Task {
+            await model.run {
+                let draft = try await model.backend.createDraft(DraftSeed(draft: Draft(accountID: account.id)))
+                await model.reloadDrafts()
+                sheet = .compose(draft.id)
+            }
+        }
+    }
 
     var body: some View {
         Group {
@@ -37,7 +57,13 @@ struct MailWorkspaceView: View {
                 }
             }
         }
-        .task { await model.refresh() }
+        .task {
+            await model.refresh()
+            answerComposeRequest()   // WORD-04: arrived here from File ▸ New Message
+        }
+        .onChange(of: appState?.triggerCompose ?? false) { _, requested in
+            if requested { answerComposeRequest() }   // already on this page
+        }
         .onReceive(NotificationCenter.default.publisher(for: ConnectedMailRuntime.didChange).receive(on: RunLoop.main)) { _ in
             rebuildIfNeeded()
         }
@@ -236,7 +262,7 @@ private struct MailWorkspaceReadyView: View {
             }
             .disabled(!model.actions.contains(.compose))
             .help(model.actions.contains(.compose) ? String(localized: "New message") : String(localized: "Turn on Send mail for an account to compose"))
-            .keyboardShortcut("n", modifiers: [.command, .option])
+            // ⌥⌘N is File ▸ New Message (WORD-04), which reaches this page from any other.
             .accessibilityIdentifier("mail.compose")
 
             Button { Task { await model.syncNow() } } label: {

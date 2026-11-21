@@ -614,6 +614,15 @@ struct ContentView: View {
             }
             ToolbarItemGroup(placement: .automatic) {
                 if modelVM.showParsedList {
+                    // WORD-04 (owner 2026-11-21): the main list had no Import
+                    // button — only File ▸ Open Email Archive… (⌘O).
+                    Button { appState.triggerFileImport = true } label: {
+                        Label("Import", systemImage: "square.and.arrow.down")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .help("Import a mailbox file or folder (⌘O)")
+                    .accessibilityIdentifier("archive.list.import")
+
                     Button { sidebarSelection = .emailInbox } label: {
                         Label("Inbox", systemImage: "envelope")
                     }
