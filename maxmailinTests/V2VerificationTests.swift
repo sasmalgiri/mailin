@@ -14057,6 +14057,28 @@ final class DeepDiveAppFixesTests: XCTestCase {
     }
 
     /// WORD-01 follow-up (owner: "in ui i have not seen any where"): Advanced
+    /// CRASH-01 (owner 2026-11-22): the Live Mail status line clears itself after 8 s.
+    /// As a bottom safe-area inset of the whole NavigationSplitView its removal changed
+    /// every column's safe area at once and AppKit threw "more Update Constraints in
+    /// Window passes than there are views in the window". On the Mac it sits below.
+    func testLiveMailStatusLine_isBelowTheSplitView_notItsSafeAreaOnTheMac() throws {
+        let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/MailWorkspaceView.swift")
+        let text = try String(contentsOf: file, encoding: .utf8)
+        XCTAssertTrue(text.contains("""
+                VStack(spacing: 0) {
+                    splitView
+                    statusLine
+                }
+        """), "Mac: status line stacked below the split view")
+        let insets = text.components(separatedBy: ".safeAreaInset(edge: .bottom) { statusLine }").count - 1
+        XCTAssertEqual(insets, 1, "only the iOS branch keeps the inset")
+        guard let mac = text.range(of: "#if os(macOS)\n        // CRASH-01"),
+              let iosBranch = text.range(of: "#else\n        splitView\n            .safeAreaInset(edge: .bottom) { statusLine }", range: mac.upperBound..<text.endIndex)
+        else { return XCTFail("the inset is inside the non-Mac branch") }
+        XCTAssertLessThan(mac.lowerBound, iosBranch.lowerBound)
+    }
+
     /// Search is named on the main list's bar, in Edit ▸ Advanced Search…
     /// (⌥⇧⌘F) and in ⌘K, and every list that can show it answers the command.
     func testAdvancedSearch_isReachableFromTheMenuThePaletteAndEveryList() throws {

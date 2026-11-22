@@ -198,6 +198,22 @@ private struct MailWorkspaceReadyView: View {
     #endif
 
     var body: some View {
+        #if os(macOS)
+        // CRASH-01 (owner 2026-11-22): on the Mac the status line sits below the split
+        // view, not in its bottom safe area. When the message cleared itself after 8 s the
+        // inset vanished, every column's safe area changed at once, and AppKit raised
+        // "more Update Constraints in Window passes than there are views in the window".
+        VStack(spacing: 0) {
+            splitView
+            statusLine
+        }
+        #else
+        splitView
+            .safeAreaInset(edge: .bottom) { statusLine }
+        #endif
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             MailSidebar(model: model, sheet: $sheet)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
@@ -227,7 +243,6 @@ private struct MailWorkspaceReadyView: View {
         #if os(macOS)
         .toolbar { toolbar }
         #endif
-        .safeAreaInset(edge: .bottom) { statusLine }
         .onChange(of: model.section) { _, _ in
             model.selectedMessage = nil
             Task { await model.reloadMailbox() }
