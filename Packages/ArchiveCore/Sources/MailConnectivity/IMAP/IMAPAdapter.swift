@@ -740,6 +740,7 @@ public actor IMAPAdapter: MailProviderAdapter {
             throw MailProviderError.permanent("not an IMAP identity")
         }
         let host = "\(configuration.host):\(configuration.port)"
+        let resumedFrom = sink.bytesWritten          // DL-07: > 0 = continuing a broken download
         return try await withSession(context) { s in
             // A pooled connection's selection may be stale (it was opened
             // before the server changed): it is reused only while it agrees,
@@ -756,7 +757,7 @@ public actor IMAPAdapter: MailProviderAdapter {
                 // A different UIDVALIDITY means this UID may now be another
                 // message: never fetch it under the old identity.
                 if status.uidValidity == validity {
-                    body = try await s.fetchBody(uid: uid, into: { try sink.write($0) })
+                    body = try await s.fetchBody(uid: uid, from: sink.bytesWritten, into: { try sink.write($0) })
                     if body != nil { break }
                 }
                 if fresh { throw MailProviderError.itemUnavailable }
@@ -768,7 +769,7 @@ public actor IMAPAdapter: MailProviderAdapter {
             let metadata = ProviderMetadata(representation: .imapLiteral, internalDate: body.internalDate,
                                             revision: body.modSeq.map(String.init), flags: body.flags, extra: extra)
             return FetchedItemMetadata(occurrences: [self.occurrence(mailbox, uidValidity: validity)], metadata: metadata,
-                                       expectedByteCount: body.byteCount)
+                                       expectedByteCount: try Self.wholeSize(body, continuedFrom: resumedFrom))
         }
     }
 
@@ -809,7 +810,8 @@ public actor IMAPAdapter: MailProviderAdapter {
                 let uid: UInt32?
                 if let cached, cached.validity == status.uidValidity { uid = cached.uid }
                 else { uid = try await s.gmailSearch(messageID: id) }
-                guard let uid, let body = try await s.fetchBody(uid: uid, into: { try sink.write($0) }) else { continue }
+                let resumedFrom = sink.bytesWritten
+                guard let uid, let body = try await s.fetchBody(uid: uid, from: resumedFrom, into: { try sink.write($0) }) else { continue }
                 if let got = body.gmailMessageID, got != id {
                     throw MailProviderError.permanent("the server sent message \(got) for a request of message \(id)")
                 }
@@ -826,10 +828,25 @@ public actor IMAPAdapter: MailProviderAdapter {
                 if let size = item.sizeHint { extra["imap.rfc822Size"] = String(size) }
                 let metadata = ProviderMetadata(representation: .imapLiteral, internalDate: body.internalDate,
                                                 revision: body.modSeq.map(String.init), flags: body.flags, extra: extra)
-                return FetchedItemMetadata(occurrences: occurrences, metadata: metadata, expectedByteCount: body.byteCount)
+                return FetchedItemMetadata(occurrences: occurrences, metadata: metadata,
+                                           expectedByteCount: try Self.wholeSize(body, continuedFrom: resumedFrom))
             }
             throw MailProviderError.itemUnavailable
         }
+    }
+
+    /// DL-07: IMAP messages never change under a UID, so a broken download
+    /// of a large one continues where it stopped (the engine keeps the bytes).
+    public nonisolated var resumesPartialDownloads: Bool { true }
+
+    /// The whole message's byte count: what was kept plus the continued part,
+    /// checked against RFC822.SIZE when the server sent it.
+    static func wholeSize(_ body: IMAPFetchedBody, continuedFrom offset: Int64) throws -> Int64 {
+        let whole = offset + body.byteCount
+        if offset > 0, let total = body.totalSize, total != whole {
+            throw MailProviderError.transient("the continued message is \(whole) bytes, the server says \(total)")
+        }
+        return whole
     }
 
     // MARK: Changes

@@ -112,6 +112,9 @@ public struct IMAPFetchedBody: Sendable {
     /// … and its labels: system labels as sent (`\Inbox`, `\Sent` …), user
     /// labels decoded like mailbox names.
     public var gmailLabels: [String] = []
+    /// DL-07: the whole message's size (RFC822.SIZE), so a continued fetch
+    /// can be checked against it.
+    public var totalSize: Int64? = nil
 }
 
 /// V4-16: one message listed on a Gmail server — UID, size and X-GM-MSGID.
@@ -594,12 +597,15 @@ public actor IMAPSession {
 
     /// Streams the complete message `uid` (BODY.PEEK[] — \Seen is never set)
     /// into `sink`. nil = the server has no such UID (expunged).
-    func fetchBody(uid: UInt32, into sink: @escaping IMAPLiteralSink) async throws -> IMAPFetchedBody? {
+    /// `from` (DL-07): continue a message already received up to that byte —
+    /// a partial fetch, `BODY.PEEK[]<from.n>`; the literal is the rest only.
+    /// A message under a UID never changes, so the two parts are one message.
+    func fetchBody(uid: UInt32, from offset: Int64 = 0, into sink: @escaping IMAPLiteralSink) async throws -> IMAPFetchedBody? {
         var items = "UID RFC822.SIZE FLAGS INTERNALDATE"
         if condstoreEnabled { items += " MODSEQ" }
         let gmail = hasGmailExtensions
         if gmail { items += " X-GM-MSGID X-GM-LABELS" }
-        items += " BODY.PEEK[]"
+        items += offset > 0 ? " BODY.PEEK[]<\(offset).4000000000>" : " BODY.PEEK[]"
         let r = try await runOK([.raw("UID FETCH \(uid) (\(items))")], context: .fetch, bodySink: sink)
         var found: IMAPFetchedBody?
         for case .fetch(_, let attrs) in r.untagged {
@@ -617,6 +623,7 @@ public actor IMAPSession {
             let date = attrs.first(where: { $0.name == "INTERNALDATE" })?.value.text.flatMap(Self.parseInternalDate)
             let modseq = attrs.first(where: { $0.name == "MODSEQ" })?.value.list?.first?.number
             found = IMAPFetchedBody(uid: u, byteCount: n, flags: flags, internalDate: date, modSeq: modseq)
+            found?.totalSize = attrs.first(where: { $0.name == "RFC822.SIZE" })?.value.number.flatMap { Int64(exactly: $0) }
             if gmail {
                 found?.gmailMessageID = attrs.first(where: { $0.name == "X-GM-MSGID" })?.value.number
                 found?.gmailLabels = (attrs.first(where: { $0.name == "X-GM-LABELS" })?.value.list ?? []).compactMap(gmailLabel)

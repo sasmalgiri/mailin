@@ -678,6 +678,50 @@ final class IMAPAdapterTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(model.connections, 2)
     }
 
+    /// DL-07 (owner 2026-11-23, download-manager techniques: resume a broken
+    /// download): a large message cut off by the network continues from the
+    /// bytes already received (a partial fetch) instead of starting again —
+    /// and the saved message is byte for byte the server's.
+    func testDropMidLiteral_largeMessage_continuesFromTheReceivedBytes_byteExact() async throws {
+        let server = try await startServer { $0.dropOnBodyOfUID = 2 }
+        let model = server.model
+        model.addMailbox("INBOX")
+        for i in 0..<3 { model.add(Self.message("big-\(i)", extra: String(repeating: "y", count: 400_000)), to: "INBOX") }
+        let sink = makeSink()
+        let adapter = try makeAdapter(server, maxConnections: 1)
+        try await register(adapter, in: sink)
+        let engine = makeEngine(adapter, sink)
+        await engine.setPartialResumeMinimumBytes(64 * 1_024)
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed, "\(report.outcome)")
+        XCTAssertEqual(report.receipt?.stored, 3)
+        try await assertByteExact(sink, account: adapter.accountID, oracle: oracle(model))
+        let resumed = await engine.downloadsResumed
+        let saved = await engine.bytesNotDownloadedAgain
+        XCTAssertEqual(resumed, 1, "the broken download continued")
+        XCTAssertGreaterThanOrEqual(saved, 64 * 1_024, "the received part was not downloaded again")
+        XCTAssertTrue(model.transcript.contains { $0.hasPrefix("partial fetch of UID 2 from ") }, "a partial fetch asked for the rest")
+        XCTAssertTrue(model.transcript.contains { $0.contains("BODY.PEEK[]<") }, "BODY.PEEK keeps \\Seen untouched")
+    }
+
+    /// DL-07: below the threshold a broken download simply starts again (no partial fetch).
+    func testDropMidLiteral_smallMessage_startsAgain() async throws {
+        let server = try await startServer { $0.dropOnBodyOfUID = 2 }
+        let model = server.model
+        model.addMailbox("INBOX")
+        for i in 0..<3 { model.add(Self.message("small-\(i)", extra: String(repeating: "z", count: 5_000)), to: "INBOX") }
+        let sink = makeSink()
+        let adapter = try makeAdapter(server, maxConnections: 1)
+        try await register(adapter, in: sink)
+        let engine = makeEngine(adapter, sink)
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed)
+        try await assertByteExact(sink, account: adapter.accountID, oracle: oracle(model))
+        let resumed = await engine.downloadsResumed
+        XCTAssertEqual(resumed, 0)
+        XCTAssertFalse(model.transcript.contains { $0.hasPrefix("partial fetch") })
+    }
+
     func testReconnectPolicy_exponentialAndCapped() {
         let p = IMAPReconnectPolicy(base: 1, maximum: 8, sleep: { _ in })
         XCTAssertEqual((0...6).map { p.delay(afterFailures: $0) }, [0, 1, 2, 4, 8, 8, 8])

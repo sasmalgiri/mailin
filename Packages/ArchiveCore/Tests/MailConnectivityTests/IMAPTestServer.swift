@@ -621,7 +621,14 @@ private final class ServerConnection: @unchecked Sendable {
         }
         for (index, msg) in m.messages.enumerated() where wanted.contains(msg.uid) {
             if let since = changedSince, msg.modseq <= since { continue }
-            let wantsBody = items.contains("BODY.PEEK[]") || items.contains("BODY[]")
+            // DL-07: a partial fetch, BODY.PEEK[]<origin.count> — the rest of the message from `origin`.
+            let partialItem = items.first { $0.hasPrefix("BODY.PEEK[]<") }
+            let origin = partialItem.flatMap { item -> Int? in
+                guard let open = item.firstIndex(of: "<"), let dot = item.firstIndex(of: ".", after: open) else { return nil }
+                return Int(item[item.index(after: open)..<dot])
+            } ?? 0
+            let wantsBody = items.contains("BODY.PEEK[]") || items.contains("BODY[]") || partialItem != nil
+            if partialItem != nil { model.record("partial fetch of UID \(msg.uid) from \(origin)") }
             if wantsBody, model.takeDrop(msg.uid) {
                 // Drop mid-literal: half the bytes, then the connection ends.
                 write(Data("* \(index + 1) FETCH (UID \(msg.uid) BODY[] {\(msg.bytes.count)}\r\n".utf8) + msg.bytes.prefix(msg.bytes.count / 2))
@@ -646,8 +653,10 @@ private final class ServerConnection: @unchecked Sendable {
             var d = Data("* \(index + 1) FETCH (".utf8)
             d.append(Data(parts.joined(separator: " ").utf8))
             if wantsBody {
-                d.append(Data(((parts.isEmpty ? "" : " ") + "BODY[] {\(msg.bytes.count)}\r\n").utf8))
-                d.append(msg.bytes)
+                let rest = msg.bytes.dropFirst(min(origin, msg.bytes.count))
+                let section = partialItem != nil ? "BODY[]<\(origin)>" : "BODY[]"
+                d.append(Data(((parts.isEmpty ? "" : " ") + "\(section) {\(rest.count)}\r\n").utf8))
+                d.append(Data(rest))
                 if model.uidAfterBody { d.append(Data(" UID \(msg.uid)".utf8)) }
             }
             d.append(Data(")\r\n".utf8))
@@ -810,5 +819,11 @@ final class ScriptedIMAPTransport: IMAPByteTransport, @unchecked Sendable {
         let w = waiter; waiter = nil
         lock.unlock()
         w?.resume(returning: nil)
+    }
+}
+
+private extension String {
+    func firstIndex(of c: Character, after i: Index) -> Index? {
+        self[index(after: i)...].firstIndex(of: c)
     }
 }

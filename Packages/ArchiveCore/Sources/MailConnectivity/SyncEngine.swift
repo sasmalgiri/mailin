@@ -696,6 +696,12 @@ public actor SyncEngine {
     static let pipelineForcedByEnvironment = ProcessInfo.processInfo.environment["MAILIN_PIPELINED_PAGES"] == "1"
     var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
     private var sinkPreparesInParallel = false
+    /// DL-07: a broken download is continued only from this many bytes up
+    /// (below it, starting again costs less than a second request).
+    var partialResumeMinimumBytes: Int64 = 1_048_576
+    func setPartialResumeMinimumBytes(_ n: Int64) { partialResumeMinimumBytes = n }
+    public private(set) var downloadsResumed = 0
+    public private(set) var bytesNotDownloadedAgain: Int64 = 0
     /// DL-06: the speed limit shared by every account (off unless the person sets one).
     var limiter: BandwidthLimiter = .shared
     func setLimiter(_ l: BandwidthLimiter) { limiter = l }
@@ -886,12 +892,16 @@ public actor SyncEngine {
     }
 
     private func captureOne(_ ref: RemoteItemRef, occurrences: [RemoteFolderOccurrence], runID: String) async throws {
+        // DL-07: bytes of a broken download kept for the next attempt (resumable adapters only).
+        let partial = PartialDownload()
+        defer { partial.discard() }
         do {
             let limit = limits.maxConcurrentDownloads
             _ = try await perform(.download) { ctx in
                 try await self.scheduler.acquire(account: self.accountID, accountLimit: limit)
                 do {
-                    let outcome = try await self.fetchAndCapture(ref, occurrences: occurrences, runID: runID, context: ctx)
+                    let outcome = try await self.fetchAndCapture(ref, occurrences: occurrences, runID: runID, context: ctx,
+                                                                 partial: partial)
                     await self.scheduler.release(account: self.accountID)
                     return outcome
                 } catch {
@@ -912,7 +922,7 @@ public actor SyncEngine {
     }
 
     private func fetchAndCapture(_ ref: RemoteItemRef, occurrences: [RemoteFolderOccurrence], runID: String,
-                                 context: ProviderRequestContext) async throws -> CaptureOutcome {
+                                 context: ProviderRequestContext, partial: PartialDownload? = nil) async throws -> CaptureOutcome {
         // Checked immediately before the bytes are written: a full or
         // missing volume pauses the account before anything is spooled.
         // V4-12: a message needs room twice (the staged copy and the
@@ -926,7 +936,15 @@ public actor SyncEngine {
         // DL-06: the optional speed limit — a known size waits for its turn first.
         let hinted = max(0, ref.sizeHint ?? 0)
         if hinted > 0 { try await limiter.pace(hinted) }
-        let bytes = RawByteSink(writer: try sink.makeStagingWriter())
+        let resumable = adapter.resumesPartialDownloads && partial != nil
+        let bytes: RawByteSink
+        if resumable, let kept = partial?.take() {
+            bytes = kept
+            downloadsResumed += 1
+            bytesNotDownloadedAgain += kept.bytesWritten
+        } else {
+            bytes = RawByteSink(writer: try sink.makeStagingWriter())
+        }
         do {
             let fetched = try await adapter.fetchRaw(ref, into: bytes, context: context)
             let staged = try bytes.finish()
@@ -944,7 +962,14 @@ public actor SyncEngine {
             return outcome
         } catch {
             largestWriteNeed = max(largestWriteNeed, need, 2 * bytes.bytesWritten)
-            bytes.discard()
+            // DL-07: a large message cut off by the network keeps what arrived,
+            // when the file holds exactly the bytes counted (nothing half-written).
+            if resumable, case MailProviderError.transient = error, !Task.isCancelled,
+               bytes.bytesWritten >= partialResumeMinimumBytes, bytes.fileMatchesCount {
+                partial?.keep(bytes)
+            } else {
+                bytes.discard()
+            }
             throw error
         }
     }
@@ -1245,4 +1270,15 @@ private final class PageTaskBag: @unchecked Sendable {
         let all: [Task<Void, Error>] = lock.withLock { cancelled = true; return tasks }
         for task in all { task.cancel() }
     }
+}
+
+/// DL-07: the staged bytes of one message's broken download, between attempts.
+final class PartialDownload: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: RawByteSink?
+
+    func keep(_ sink: RawByteSink) { lock.withLock { kept = sink } }
+    func take() -> RawByteSink? { lock.withLock { defer { kept = nil }; return kept } }
+    /// Whatever is still kept when the message is done (saved or given up) is removed.
+    func discard() { take()?.discard() }
 }

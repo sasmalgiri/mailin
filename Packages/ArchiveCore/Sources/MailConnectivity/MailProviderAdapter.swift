@@ -231,6 +231,14 @@ public final class RawByteSink: @unchecked Sendable {
 
     public var bytesWritten: Int64 { lock.withLock { written } }
 
+    /// DL-07: the staging file holds exactly the bytes counted (no chunk half-written).
+    var fileMatchesCount: Bool {
+        lock.withLock {
+            let size = (try? FileManager.default.attributesOfItem(atPath: writer.fileURL.path)[.size] as? NSNumber)?.int64Value
+            return size == written
+        }
+    }
+
     func finish() throws -> StagedRawMessage { try lock.withLock { try writer.finish() } }
     func discard() { lock.withLock { writer.discard() } }
 }
@@ -273,6 +281,9 @@ public protocol MailProviderAdapter: Sendable {
     /// Releases the adapter's network session (the app calls it when it
     /// replaces or drops the adapter). The adapter is not used afterwards.
     func close() async
+    /// DL-07: a download that broke part-way can continue from the bytes
+    /// already received (the provider's messages never change; IMAP only).
+    var resumesPartialDownloads: Bool { get }
 
     /// Server ids of listed folders that `.allFolders` leaves out, as a
     /// provider rule (Gmail over IMAP: Spam and Trash, which All Mail does not
@@ -284,6 +295,7 @@ public protocol MailProviderAdapter: Sendable {
 extension MailProviderAdapter {
     /// Adapters without a session of their own have nothing to release.
     public func close() async {}
+    public var resumesPartialDownloads: Bool { false }
     /// Every listed folder is part of "all folders".
     public func foldersSkippedByDefault() async -> Set<String> { [] }
 }
