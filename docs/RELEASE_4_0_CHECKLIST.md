@@ -65,6 +65,16 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-22: build 1001 replaces 1000
+
+4.0 (1000) was uploaded for the Mac on 21 Nov. **Upload and submit 4.0 (1001) instead, for Mac and iOS** — it adds:
+the search-operators list opens below the search box (above it, it ran off the top of an iPhone screen; the App
+Store screenshots show the fixed layout), and the bundled demo archive no longer carries the owner's name and address
+(now "Alex Morgan <alex.morgan@example.com>"). Build number set through the target's build settings (all four
+configurations); version stays 4.0. Checks: DeepDiveAppFixes (incl. the popover direction), InterfaceLocalization,
+V3Lint 15/15; build 0 warnings. Screenshots: Downloads ▸ "mailin 4.0 App Store Screenshots" (Mac "Upload these (in
+order)", iPhone 6.9-inch, iPad 13-inch).
+
 ## 0. Before archiving
 
 - [x] The release-audit fixes (5 audits, 2026-11-14) that the owner wants in 4.0 are merged on `v3-architecture`
