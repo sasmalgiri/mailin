@@ -441,6 +441,28 @@ public actor ConnectedArchiveSink {
         try await store.finishCaptureRun(runID: runID)
     }
 
+    // MARK: DL-04 — parallel preparation
+
+    /// DL-04 (owner 2026-11-23, download-manager techniques): the two heavy
+    /// steps of a capture — copying the staged bytes into the blob store
+    /// (hashed again while copied, fsync) and reading the message — run off
+    /// this actor, so several downloaded messages are prepared at once; the
+    /// database commit stays one at a time in the store. Set by the sync
+    /// engine with its continuous queue (the fast mode).
+    private(set) var parallelPreparation = false
+    public func setParallelPreparation(_ on: Bool) { parallelPreparation = on }
+    /// Captures being prepared off the actor at once (diagnostics, tests).
+    public private(set) var peakParallelPreparations = 0
+    private var preparing = 0
+
+    private func prepare<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        guard parallelPreparation else { return try work() }
+        preparing += 1
+        peakParallelPreparations = max(peakParallelPreparations, preparing)
+        defer { preparing -= 1 }
+        return try await Task.detached(priority: .utility) { try work() }.value
+    }
+
     // MARK: Capture
 
     /// Publishes the staged bytes, commits record + occurrence + outcome in
@@ -463,7 +485,8 @@ public actor ConnectedArchiveSink {
         // delete the bytes the row is about to name. Released on every exit —
         // after the commit, or when any step below throws.
         let blobs = store.blobStore
-        let blob = try blobs.write(contentsOf: item.raw.fileURL, pin: true)
+        let staged = item.raw.fileURL
+        let blob = try await prepare { try blobs.write(contentsOf: staged, pin: true) }
         defer { blobs.unpin(blob.digest) }
         guard blob.digest == item.raw.sha256 else {
             throw ConnectedArchiveError.stagedBytesMismatch(expected: item.raw.sha256, actual: blob.digest)
@@ -495,8 +518,10 @@ public actor ConnectedArchiveSink {
             // occurrence says so on its own).
             let ownAddress = (try? await store.connectedAccountAddress(accountID: item.accountID)) ?? ""
             do {
-                email = try Self.record(from: blob, store: store, occurrences: item.occurrences,
-                                        accountAddress: ownAddress, parseHook: parseFaultHook)
+                let (store, occurrences, hook) = (store, item.occurrences, parseFaultHook)
+                email = try await prepare {
+                    try Self.record(from: blob, store: store, occurrences: occurrences, accountAddress: ownAddress, parseHook: hook)
+                }
             } catch {
                 item.metadata.extra[Self.parseErrorKey] = error.localizedDescription
                 email = try Self.unreadableRecord(occurrences: item.occurrences, reason: error.localizedDescription)

@@ -212,6 +212,40 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(ids.count, 60); XCTAssertEqual(Set(ids).count, 60)
     }
 
+    /// DL-04: with the continuous queue the archive prepares several downloaded
+    /// messages at once (blob copy + parse off the sink actor); the result is the
+    /// same archive as one at a time — same bytes, same records, same folders.
+    func testDL04_parallelPreparation_sameArchiveAsOneAtATime() async throws {
+        var digests: [Bool: [String: String]] = [:]
+        var subjects: [Bool: Set<String>] = [:]
+        for parallel in [false, true] {
+            let sink = makeSink("archive-\(parallel)")
+            let fake = FakeMailProvider(accountID: UUID(uuidString: "00000000-0000-0000-0000-0000000000D4")!, pageSize: 20)
+            await seed(fake, folders: 3, perFolder: 40)
+            await fake.apply(.move("f0-1", to: ["f0", "f2"]))
+            await fake.setFetchDelay(500_000)
+            try await register(fake, in: sink)
+            let engine = makeEngine(fake, sink)
+            await engine.setPipelineOverride(parallel)
+            let report = await engine.sync()
+            XCTAssertEqual(report.outcome, .completed)
+            XCTAssertEqual(report.receipt?.stored, 120)
+            let peak = await sink.peakParallelPreparations
+            if parallel { XCTAssertGreaterThanOrEqual(peak, 2, "several messages prepared at once") } else { XCTAssertEqual(peak, 0) }
+            var byKey: [String: String] = [:]
+            for row in try await sink.store.remoteMessageDigests() where row.account == fake.accountID { byKey[row.key] = row.digest }
+            digests[parallel] = byKey
+            let all = try await sink.store.summaryPage(after: nil, before: nil, cursorDate: nil, cursorID: nil, limit: 1_000)
+            subjects[parallel] = Set(all.map(\.subject))
+            let counts = try await sink.store.connectedTableCounts()
+            XCTAssertEqual(counts["remote_memberships"], 121)
+            XCTAssertTrue(stagedFiles(sink).isEmpty)
+        }
+        XCTAssertEqual(digests[true], digests[false], "the same bytes for every message")
+        XCTAssertEqual(digests[true]?.count, 120)
+        XCTAssertEqual(subjects[true], subjects[false], "the same records")
+    }
+
     // MARK: DL-01 — what a person reads first is saved first
 
     func testDL01_folderPriority_allMailInboxSentFirst_restInProviderOrder() {

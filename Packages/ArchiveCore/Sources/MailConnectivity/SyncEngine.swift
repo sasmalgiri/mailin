@@ -695,6 +695,7 @@ public actor SyncEngine {
     func setPipelineOverride(_ on: Bool?) { pipelineOverride = on }
     static let pipelineForcedByEnvironment = ProcessInfo.processInfo.environment["MAILIN_PIPELINED_PAGES"] == "1"
     var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
+    private var sinkPreparesInParallel = false
     /// Pages being saved at once (the one finishing and the next).
     public private(set) var peakPagesInFlight = 0
 
@@ -835,6 +836,11 @@ public actor SyncEngine {
     /// every item has a terminal outcome (or the run stops).
     private func process(_ entries: [(RemoteItemRef, [RemoteFolderOccurrence])], runID: String) async throws {
         guard !entries.isEmpty else { return }
+        // DL-04: the archive prepares downloaded messages in parallel with the continuous queue.
+        if sinkPreparesInParallel != pipelined {
+            sinkPreparesInParallel = pipelined
+            await sink.setParallelPreparation(pipelined)
+        }
         var seen = Set<String>()
         var unique: [(RemoteItemRef, [RemoteFolderOccurrence])] = []
         for entry in entries where seen.insert(try entry.0.identity.key()).inserted { unique.append(entry) }
