@@ -1112,12 +1112,38 @@ final class MailWorkspaceModel {
     }
 
     /// Accounts and their folders only — what a running capture's progress changes.
+    /// LIVE-SCALE-01: a refresh is running / another was asked for meanwhile.
+    private(set) var accountsRefreshRunning = false
+    private var accountsRefreshPending = false
+    /// How many refreshes actually read the store (tests).
+    private(set) var accountsRefreshReads = 0
+
+    /// Called every 2 s while a sync runs. On a large account one read takes
+    /// ~0.7 s (100,000 live messages on a 200,000-message archive, measured
+    /// 2026-11-22), so refreshes never overlap: one asked for meanwhile runs
+    /// once afterwards, any more are folded into it. Unchanged values are not
+    /// reassigned, so the sidebar and list are not redrawn for nothing.
     func refreshAccounts() async {
         guard availability == .ready else { accounts = []; return }
+        if accountsRefreshRunning { accountsRefreshPending = true; return }
+        accountsRefreshRunning = true
+        defer { accountsRefreshRunning = false }
+        repeat {
+            accountsRefreshPending = false
+            accountsRefreshReads += 1
+            await readAccounts()
+        } while accountsRefreshPending && availability == .ready
+    }
+
+    private func readAccounts() async {
         await run(clearsError: false) {
             let all = try await self.backend.accounts()
-            self.accounts = all.filter { $0.account.connectionState != .removed }
-            for a in self.accounts { self.folders[a.id] = try await self.backend.folders(a.id) }
+            let listed = all.filter { $0.account.connectionState != .removed }
+            if listed != self.accounts { self.accounts = listed }
+            for a in listed {
+                let folders = try await self.backend.folders(a.id)
+                if self.folders[a.id] != folders { self.folders[a.id] = folders }
+            }
             // Removed accounts that still have archived mail stay listed (and searchable in the inbox).
             var removed: [MailAccountSnapshot] = []
             var summaries: [UUID: ConnectedAccountArchiveSummary] = [:]
@@ -1126,8 +1152,8 @@ final class MailWorkspaceModel {
                 removed.append(snapshot)
                 summaries[snapshot.id] = summary
             }
-            self.removedAccounts = removed
-            self.removedArchive = summaries
+            if removed != self.removedAccounts { self.removedAccounts = removed }
+            if summaries != self.removedArchive { self.removedArchive = summaries }
             self.resetSectionIfGone()
         }
     }

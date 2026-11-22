@@ -12058,6 +12058,33 @@ actor LifecycleSlowProvider: MailProviderAdapter {
 
 /// The Mail workspace's removal / removed-account decisions, without a network.
 @MainActor
+/// LIVE-SCALE-01: the first `accounts()` read waits until released (a large
+/// account's status takes ~0.7 s); later reads return at once.
+private final class SlowRefreshBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var snapshots: [MailAccountSnapshot] = []
+    private(set) var accountCalls = 0
+    private(set) var maxConcurrent = 0
+    private var inFlight = 0
+    private var gate: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func release() { released = true; gate?.resume(); gate = nil }
+
+    func accounts() async throws -> [MailAccountSnapshot] {
+        accountCalls += 1
+        inFlight += 1
+        maxConcurrent = max(maxConcurrent, inFlight)
+        defer { inFlight -= 1 }
+        if !released { await withCheckedContinuation { gate = $0 } }
+        return snapshots
+    }
+    func folders(_ account: UUID) async throws -> [ConnectedFolderSummary] { [] }
+    func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
+        ConnectedMailboxPage(rows: [], total: 0, next: nil)
+    }
+}
+
 private final class LifecycleFakeBackend: MailWorkspaceBackend {
     var availability: MailWorkspaceAvailability = .ready
     var snapshots: [MailAccountSnapshot] = []
@@ -14057,6 +14084,34 @@ final class DeepDiveAppFixesTests: XCTestCase {
     }
 
     /// WORD-01 follow-up (owner: "in ui i have not seen any where"): Advanced
+    /// LIVE-SCALE-01 (owner 2026-11-22: "large volume of live mail with current archive
+    /// load"): the 2 s progress refresh never overlaps itself. Five asked for while one
+    /// is reading make exactly one more read, and an unchanged result is not reassigned.
+    func testLiveMailAccountRefresh_neverOverlaps_andFoldsRepeatedRequestsIntoOne() async throws {
+        let fake = SlowRefreshBackend()
+        fake.snapshots = [MailAccountSnapshot(account: MailAccount(provider: .gmail, issuer: GmailOAuth.issuer,
+                                                                   displayIdentity: "big@example.com",
+                                                                   enabledModes: [.capture], connectionState: .connected),
+                                              status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)]
+        let model = MailWorkspaceModel(backend: fake)
+        let first = Task { await model.refreshAccounts() }
+        while fake.accountCalls == 0 { await Task.yield() }
+        XCTAssertTrue(model.accountsRefreshRunning)
+        for _ in 0..<5 { await model.refreshAccounts() }      // the ticker fires while the first read is slow
+        XCTAssertEqual(fake.accountCalls, 1, "no second read starts while one runs")
+        fake.release()
+        await first.value
+        XCTAssertEqual(model.accountsRefreshReads, 2, "the five requests became one follow-up read")
+        XCTAssertEqual(fake.accountCalls, 2)
+        XCTAssertEqual(fake.maxConcurrent, 1)
+        XCTAssertFalse(model.accountsRefreshRunning)
+        XCTAssertEqual(model.accounts.map(\.account.displayIdentity), ["big@example.com"])
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/MailWorkspaceModel.swift"), encoding: .utf8)
+        XCTAssertTrue(source.contains("if listed != self.accounts { self.accounts = listed }"), "unchanged accounts are not reassigned")
+        XCTAssertTrue(source.contains("if self.folders[a.id] != folders { self.folders[a.id] = folders }"), "nor unchanged folder counts")
+    }
+
     /// CRASH-01 (owner 2026-11-22): the Live Mail status line clears itself after 8 s.
     /// As a bottom safe-area inset of the whole NavigationSplitView its removal changed
     /// every column's safe area at once and AppKit threw "more Update Constraints in
