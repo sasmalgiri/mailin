@@ -466,6 +466,8 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
 
     func syncNow(_ account: UUID) async { await runtime.sync(account) }
 
+    func cancelSync(_ account: UUID) async -> Bool { runtime.cancelSync(account) }
+
     func setPaused(_ paused: Bool, account: UUID) async throws { try await runtime.setPaused(paused, account: account) }
 
     func folders(_ account: UUID) async throws -> [ConnectedFolderSummary] {

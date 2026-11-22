@@ -229,6 +229,8 @@ final class ConnectedMailRuntime {
     /// server that kept failing is tried again on its own.
     private(set) var nextRetry: [UUID: Date] = [:]
     private var retryTasks: [UUID: Task<Void, Never>] = [:]
+    /// SYNC-CANCEL-01: the running capture of each account, so Cancel sync can stop it.
+    private var captureBoxes: [UUID: CaptureTaskBox] = [:]
     /// One adapter per account, kept while the account's connection settings
     /// are unchanged (each adapter owns a URLSession; rebuilding it on every
     /// reload leaked one session per account per reload).
@@ -451,6 +453,7 @@ final class ConnectedMailRuntime {
         let selection: SyncSelection
         if let explicit { selection = explicit } else { selection = await savedSelection(id) }
         let box = CaptureTaskBox()
+        captureBoxes[id] = box
         guard let token = policy.register(accountID: id, label: "capture", cancel: { box.cancel() }) else {
             endRun(id)
             return nil
@@ -479,8 +482,22 @@ final class ConnectedMailRuntime {
         return report
     }
 
+    /// SYNC-CANCEL-01 (owner 2026-11-23): stops the account's running capture now.
+    /// Unlike Pause, the account stays on: what was saved is kept (each message is
+    /// committed before the next), the run is reported as cancelled (never as a
+    /// completed sync, no automatic retry), and the next Sync now or automatic run
+    /// continues from the saved checkpoints. False = nothing was running.
+    @discardableResult
+    func cancelSync(_ id: UUID) -> Bool {
+        cancelRetry(id)
+        guard running.contains(id), let box = captureBoxes[id] else { return false }
+        box.cancel()
+        return true
+    }
+
     private func endRun(_ id: UUID) {
         running.remove(id)
+        captureBoxes[id] = nil
         closeRetired(id)
         for waiter in runEndWaiters.removeValue(forKey: id) ?? [] { waiter.resume() }
         NotificationCenter.default.post(name: Self.didChange, object: self)
@@ -683,6 +700,7 @@ final class ConnectedMailRuntime {
         guard let engine = engines[id], !running.contains(id) else { return nil }
         running.insert(id)
         let box = CaptureTaskBox()
+        captureBoxes[id] = box
         guard let token = policy.register(accountID: id, label: "selective capture", cancel: { box.cancel() }) else {
             endRun(id)
             return nil

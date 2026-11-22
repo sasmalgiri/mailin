@@ -868,6 +868,8 @@ protocol MailWorkspaceBackend: AnyObject {
     func confirmSendingAddress(_ account: UUID) async throws
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async throws
     func syncNow(_ account: UUID) async
+    /// Stops the account's running capture (kept mail stays); false = none was running.
+    func cancelSync(_ account: UUID) async -> Bool
     func setPaused(_ paused: Bool, account: UUID) async throws
     func folders(_ account: UUID) async throws -> [ConnectedFolderSummary]
     func setFolderSelected(_ serverID: String, selected: Bool, account: UUID) async throws
@@ -931,6 +933,7 @@ extension MailWorkspaceBackend {
     func confirmSendingAddress(_ account: UUID) async throws { throw MailBackendUnavailable() }
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account: UUID) async throws { throw MailBackendUnavailable() }
     func syncNow(_ account: UUID) async {}
+    func cancelSync(_ account: UUID) async -> Bool { false }
     func setPaused(_ paused: Bool, account: UUID) async throws { throw MailBackendUnavailable() }
     func folders(_ account: UUID) async throws -> [ConnectedFolderSummary] { [] }
     func setFolderSelected(_ serverID: String, selected: Bool, account: UUID) async throws { throw MailBackendUnavailable() }
@@ -1329,9 +1332,31 @@ final class MailWorkspaceModel {
         let ids = (account.map { [$0] } ?? accounts.filter { $0.account.enabledModes.contains(.capture) && !$0.isPaused }.map(\.id))
             .filter { id in self.account(id)?.isRunning != true }
         busy = true
-        for id in ids { await backend.syncNow(id) }
+        cancelRequested = false
+        for id in ids {
+            if cancelRequested { break }   // Cancel sync: the accounts not started yet are not started
+            await backend.syncNow(id)
+        }
         busy = false
         await refresh()
+    }
+
+    /// SYNC-CANCEL-01: Cancel sync was pressed during this Sync now.
+    private(set) var cancelRequested = false
+
+    /// Stops every running capture (Sync now, the launch sync, an automatic
+    /// retry) and the accounts a Sync now has not reached yet. The accounts stay
+    /// on; mail saved so far is kept and the next Sync now continues from there.
+    func cancelSync() async {
+        cancelRequested = true
+        var stopped = 0
+        for snapshot in accounts where snapshot.isRunning {
+            if await backend.cancelSync(snapshot.id) { stopped += 1 }
+        }
+        if stopped > 0 || busy {
+            message = String(localized: "Sync cancelled. Mail saved so far is kept; Sync now continues where it stopped.")
+        }
+        await refreshAccounts()
     }
 
     func setPaused(_ paused: Bool, account: UUID) async {

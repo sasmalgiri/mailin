@@ -12058,6 +12058,37 @@ actor LifecycleSlowProvider: MailProviderAdapter {
 
 /// The Mail workspace's removal / removed-account decisions, without a network.
 @MainActor
+/// SYNC-CANCEL-01: a capture runs until Cancel sync stops it.
+private final class CancellableSyncBackend: MailWorkspaceBackend {
+    var availability: MailWorkspaceAvailability = .ready
+    var snapshots: [MailAccountSnapshot] = []
+    var blocks = true
+    private(set) var started: [UUID] = []
+    private(set) var cancelled: [UUID] = []
+    private var running: UUID?
+    private var gate: CheckedContinuation<Void, Never>?
+
+    func accounts() async throws -> [MailAccountSnapshot] {
+        snapshots.map { s in var s = s; s.isRunning = s.id == running; return s }
+    }
+    func syncNow(_ account: UUID) async {
+        started.append(account)
+        guard blocks else { return }
+        running = account
+        await withCheckedContinuation { gate = $0 }
+        running = nil
+    }
+    func cancelSync(_ account: UUID) async -> Bool {
+        guard running == account else { return false }
+        cancelled.append(account)
+        gate?.resume(); gate = nil
+        return true
+    }
+    func mailbox(_ query: ConnectedMailboxQuery, after: ConnectedMailboxCursor?) async throws -> ConnectedMailboxPage {
+        ConnectedMailboxPage(rows: [], total: 0, next: nil)
+    }
+}
+
 /// LIVE-SCALE-01: the first `accounts()` read waits until released (a large
 /// account's status takes ~0.7 s); later reads return at once.
 private final class SlowRefreshBackend: MailWorkspaceBackend {
@@ -14110,6 +14141,55 @@ final class DeepDiveAppFixesTests: XCTestCase {
             .appendingPathComponent("maxmailin/MailWorkspaceModel.swift"), encoding: .utf8)
         XCTAssertTrue(source.contains("if listed != self.accounts { self.accounts = listed }"), "unchanged accounts are not reassigned")
         XCTAssertTrue(source.contains("if self.folders[a.id] != folders { self.folders[a.id] = folders }"), "nor unchanged folder counts")
+    }
+
+    /// SYNC-CANCEL-01 (owner 2026-11-23: "can we have a cancel sync button"): while
+    /// mail is being saved the toolbar offers Cancel sync; it stops the running
+    /// capture, the accounts a Sync now has not reached are not started, and the
+    /// page says what was kept. (The engine side — a cancelled run keeps what it
+    /// saved, is not a completed sync, and the next run finishes exactly — is
+    /// SyncEngineTests.testT23_cancellation_stopsSafely_noCompletionClaim_resumeIsExact.)
+    func testCancelSync_stopsTheRunningCapture_andTheAccountsNotYetStarted() async throws {
+        let fake = CancellableSyncBackend()
+        func snap(_ address: String) -> MailAccountSnapshot {
+            MailAccountSnapshot(account: MailAccount(provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: address,
+                                                     enabledModes: [.capture], connectionState: .connected),
+                                status: nil, unavailableReason: nil, isPaused: false, lastRunSummary: nil)
+        }
+        fake.snapshots = [snap("a@example.com"), snap("b@example.com"), snap("c@example.com")]
+        let model = MailWorkspaceModel(backend: fake)
+        await model.refreshAccounts()
+        XCTAssertEqual(model.accounts.count, 3)
+
+        let run = Task { await model.syncNow() }
+        while fake.started.isEmpty { await Task.yield() }
+        let first = try XCTUnwrap(fake.started.first)
+        await model.refreshAccounts()                      // the page sees the running account
+        XCTAssertTrue(model.anyRunning && model.busy)
+        await model.cancelSync()
+        await run.value
+        XCTAssertEqual(fake.cancelled, [first], "the running capture is stopped")
+        XCTAssertEqual(fake.started, [first], "the two accounts not reached are not started")
+        XCTAssertFalse(model.busy)
+        XCTAssertEqual(model.message, String(localized: "Sync cancelled. Mail saved so far is kept; Sync now continues where it stopped."))
+        XCTAssertTrue(model.accounts.allSatisfy { $0.account.enabledModes.contains(.capture) }, "Cancel is not Pause: accounts stay on")
+
+        // A later Sync now starts again (and nothing is running, so Cancel says nothing).
+        model.message = nil
+        fake.blocks = false
+        await model.syncNow()
+        XCTAssertEqual(fake.started.count, 4)
+        await model.cancelSync()
+        XCTAssertNil(model.message, "nothing was running: no cancel message")
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        XCTAssertTrue(view.contains("Button { Task { await model.cancelSync() } }"), "the toolbar has the button")
+        XCTAssertTrue(view.contains("Label(String(localized: \"Cancel sync\"), systemImage: \"stop.circle\")"), "named, not an icon alone")
+        XCTAssertTrue(view.contains(".accessibilityIdentifier(\"mail.cancelSync\")"))
+        let runtime = try String(contentsOf: root.appendingPathComponent("maxmailin/ConnectedMailRuntime.swift"), encoding: .utf8)
+        XCTAssertEqual(runtime.components(separatedBy: "captureBoxes[id] = box").count - 1, 2, "both capture paths can be cancelled")
+        XCTAssertTrue(runtime.contains("captureBoxes[id] = nil"), "forgotten when the run ends")
     }
 
     /// CRASH-01 (owner 2026-11-22): the Live Mail status line clears itself after 8 s.

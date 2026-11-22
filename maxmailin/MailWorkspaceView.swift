@@ -280,19 +280,31 @@ private struct MailWorkspaceReadyView: View {
             // ⌥⌘N is File ▸ New Message (WORD-04), which reaches this page from any other.
             .accessibilityIdentifier("mail.compose")
 
-            Button { Task { await model.syncNow() } } label: {
-                if model.busy || model.anyRunning {
-                    ProgressView().controlSize(.small)
-                        .accessibilityLabel(Text("Saving mail"))
-                } else {
+            if model.busy || model.anyRunning {
+                // SYNC-CANCEL-01 (owner 2026-11-23): while mail is being saved, the
+                // place of Sync now stops it. Kept mail stays; the account stays on.
+                Button { Task { await model.cancelSync() } } label: {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                            .accessibilityHidden(true)
+                        Label(String(localized: "Cancel sync"), systemImage: "stop.circle")
+                            .labelStyle(.titleAndIcon)
+                    }
+                }
+                .help(String(localized: "Stops saving mail now. Mail saved so far is kept; Sync now continues where it stopped."))
+                .keyboardShortcut(".", modifiers: [.command])
+                .accessibilityLabel(Text("Cancel sync"))
+                .accessibilityIdentifier("mail.cancelSync")
+            } else {
+                Button { Task { await model.syncNow() } } label: {
                     Label(String(localized: "Sync now"), systemImage: "arrow.triangle.2.circlepath")
                         .labelStyle(.titleAndIcon)   // WORD-03: named
                 }
+                .disabled(!model.actions.contains(.syncNow))
+                .help(model.syncNowHelp)
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .accessibilityIdentifier("mail.syncNow")
             }
-            .disabled(!model.actions.contains(.syncNow) || model.busy || model.anyRunning)
-            .help(model.syncNowHelp)
-            .keyboardShortcut("r", modifiers: [.command, .option])
-            .accessibilityIdentifier("mail.syncNow")
 
             Button { sheet = .addAccount } label: {
                 Label(String(localized: "Add account"), systemImage: "person.crop.circle.badge.plus")
