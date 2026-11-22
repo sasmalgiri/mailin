@@ -65,6 +65,17 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-22 (evening): build 1002 replaces 1001
+
+**Upload and submit 4.0 (1002), for Mac and iOS** — it adds to 1001: CRASH-01 (ac08d4f; the Mac window could
+stop with "more Update Constraints in Window passes than there are views in the window" on Live Mail 8 s after a
+status message, when that message cleared itself; the status line now sits below the three columns on the Mac) and
+LIVE-SCALE-01 (e818082; 100,000 live messages on a 200,000-message archive measured — all checks pass, page calls
+0.03–0.43 s; the 2 s account refresh no longer overlaps itself). Build number set through the target's build
+settings (all four configurations); version stays 4.0. Checks on this candidate: DeepDiveAppFixes,
+MailWorkspace, ConnectedLifecycleAudit 42/0 (1 existing skip); package LiveMailScaleTests (20k/20k) pass; full
+rebuild: no warnings from mailin code (3 from Apple's StoreKitTest header / App Intents metadata step).
+
 ## Status 2026-11-22: build 1001 replaces 1000
 
 4.0 (1000) was uploaded for the Mac on 21 Nov. **Upload and submit 4.0 (1001) instead, for Mac and iOS** — it adds:
