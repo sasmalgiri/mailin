@@ -568,13 +568,21 @@ public actor ConnectedArchiveSink {
 
     /// Advances the cursor for (account, scope) — only when every item this
     /// run listed has a terminal outcome.
+    /// `discoveredUpTo` (DL-03, a pipelined walk): only the items listed up to
+    /// that point (`discoveredWatermark`) must be terminal — the pages after it
+    /// are still being saved. nil = every item this run listed.
     public func advanceCheckpoint(accountID: UUID, scope: String, cursor: String, bootstrapState: String = "",
-                                  runID: String) async throws {
-        let pending = try await store.pendingItemCount(runID: runID)
+                                  runID: String, discoveredUpTo: Int64? = nil) async throws {
+        let pending = try await store.pendingItemCount(runID: runID, upTo: discoveredUpTo)
         guard pending == 0 else { throw ConnectedArchiveError.itemsNotTerminal(runID: runID, pending: pending) }
         try faultHook?(.beforeCheckpoint)
         try await store.writeCheckpoint(accountID: accountID, scope: scope, cursor: cursor,
-                                        bootstrapState: bootstrapState, runID: runID)
+                                        bootstrapState: bootstrapState, runID: runID, upTo: discoveredUpTo)
+    }
+
+    /// DL-03: the point "everything listed so far" for `advanceCheckpoint(discoveredUpTo:)`.
+    public func discoveredWatermark(runID: String) async throws -> Int64 {
+        try await store.lastCaptureItemRow(runID: runID)
     }
 
     public func checkpoint(accountID: UUID, scope: String) async throws -> SyncCheckpoint? {

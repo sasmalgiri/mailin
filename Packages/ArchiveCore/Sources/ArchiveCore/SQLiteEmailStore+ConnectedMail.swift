@@ -619,24 +619,40 @@ extension SQLiteEmailStore {
 
     // MARK: Checkpoints
 
-    func pendingItemCount(runID: String) throws -> Int {
+    /// `upTo` (DL-03): only items listed up to that capture-item row count —
+    /// the pages a pipelined walk has finished; later pages are still running.
+    /// nil = every item of the run (the rule everywhere else).
+    func pendingItemCount(runID: String, upTo: Int64? = nil) throws -> Int {
         let db = try ensureDB()
-        let stmt = try prepare(db, "SELECT COUNT(*) FROM capture_items WHERE run_id = ? AND state = 'pending';")
+        let stmt = try prepare(db, "SELECT COUNT(*) FROM capture_items WHERE run_id = ? AND state = 'pending' AND rowid <= ?;")
         defer { sqlite3_finalize(stmt) }
-        bindText(stmt, 1, runID)
+        bindText(stmt, 1, runID); sqlite3_bind_int64(stmt, 2, upTo ?? Int64.max)
         guard try stepRow(stmt, db) else { return 0 }
         return Int(sqlite3_column_int64(stmt, 0))
     }
 
-    func writeCheckpoint(accountID: UUID, scope: String, cursor: String, bootstrapState: String, runID: String) throws {
+    /// DL-03: the newest capture-item row of the run. Rows keep their rowid when
+    /// their state changes (ON CONFLICT DO UPDATE), and a pending row is only ever
+    /// created by `recordDiscovered`, so "listed up to here" is exact.
+    func lastCaptureItemRow(runID: String) throws -> Int64 {
+        let db = try ensureDB()
+        let stmt = try prepare(db, "SELECT COALESCE(MAX(rowid), 0) FROM capture_items WHERE run_id = ?;")
+        defer { sqlite3_finalize(stmt) }
+        bindText(stmt, 1, runID)
+        guard try stepRow(stmt, db) else { return 0 }
+        return sqlite3_column_int64(stmt, 0)
+    }
+
+    func writeCheckpoint(accountID: UUID, scope: String, cursor: String, bootstrapState: String, runID: String,
+                         upTo: Int64? = nil) throws {
         let db = try ensureDB()
         let run = try captureRunAccount(db, runID: runID)
         guard run.account == accountID else { throw ConnectedArchiveError.accountMismatch }
         try exec(db, SQLiteHygiene.beginWrite)
         do {
             // Re-checked inside the write transaction: nothing can turn pending in between.
-            let pending = try prepare(db, "SELECT COUNT(*) FROM capture_items WHERE run_id = ? AND state = 'pending';")
-            bindText(pending, 1, runID)
+            let pending = try prepare(db, "SELECT COUNT(*) FROM capture_items WHERE run_id = ? AND state = 'pending' AND rowid <= ?;")
+            bindText(pending, 1, runID); sqlite3_bind_int64(pending, 2, upTo ?? Int64.max)
             let count = try stepRow(pending, db) ? Int(sqlite3_column_int64(pending, 0)) : 0
             sqlite3_finalize(pending)
             guard count == 0 else { throw ConnectedArchiveError.itemsNotTerminal(runID: runID, pending: count) }

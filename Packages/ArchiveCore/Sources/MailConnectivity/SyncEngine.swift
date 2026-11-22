@@ -650,25 +650,119 @@ public actor SyncEngine {
                 if cp.bootstrapState == "enumerated@\(generation)" { continue }
                 if cp.bootstrapState == "enumerating@\(generation)" { cursor = cp.cursor.isEmpty ? nil : cp.cursor }
             }
+            if pipelined {
+                try await enumeratePipelined(folder, scope: scope, from: cursor, generation: generation, runID: runID)
+                continue
+            }
             repeat {
-                let page: EnumerationPage
-                do {
-                    let pageSize = limits.pageSize
-                    page = try await perform(.request) { [adapter, cursor] ctx in
-                        try await adapter.enumerate(folder: folder, cursor: cursor, pageSize: pageSize, context: ctx)
-                    }
-                } catch MailProviderError.folderUnavailable {
-                    // Deleted / renamed on the server mid-run: what was listed
-                    // is kept; its messages reappear through the change log.
-                    page = EnumerationPage(items: [], nextCursor: nil)
-                }
+                let page = try await listPage(folder, cursor: cursor)
                 try await process(page.items.map { ($0, $0.folder.map { [$0] } ?? [folder]) }, runID: runID)
-                try await sink.advanceCheckpoint(accountID: accountID, scope: scope, cursor: page.nextCursor ?? "",
-                                                 bootstrapState: (page.nextCursor == nil ? "enumerated@" : "enumerating@") + generation,
-                                                 runID: runID)
-                try fault(.afterPageCheckpoint)
+                try await checkpointPage(scope, next: page.nextCursor, generation: generation, runID: runID)
                 cursor = page.nextCursor
             } while cursor != nil
+        }
+    }
+
+    private func listPage(_ folder: RemoteFolderOccurrence, cursor: String?) async throws -> EnumerationPage {
+        do {
+            let pageSize = limits.pageSize
+            return try await perform(.request) { [adapter, cursor] ctx in
+                try await adapter.enumerate(folder: folder, cursor: cursor, pageSize: pageSize, context: ctx)
+            }
+        } catch MailProviderError.folderUnavailable {
+            // Deleted / renamed on the server mid-run: what was listed
+            // is kept; its messages reappear through the change log.
+            return EnumerationPage(items: [], nextCursor: nil)
+        }
+    }
+
+    private func checkpointPage(_ scope: String, next: String?, generation: String, runID: String,
+                                discoveredUpTo: Int64? = nil) async throws {
+        try await sink.advanceCheckpoint(accountID: accountID, scope: scope, cursor: next ?? "",
+                                         bootstrapState: (next == nil ? "enumerated@" : "enumerating@") + generation,
+                                         runID: runID, discoveredUpTo: discoveredUpTo)
+        try fault(.afterPageCheckpoint)
+    }
+
+    // MARK: DL-03 — continuous queue
+
+    /// DL-03 (owner 2026-11-23, download-manager techniques): pages overlap.
+    /// Page N+1 is listed and its downloads start while page N's last ones
+    /// finish, so one slow message no longer leaves the download slots idle.
+    /// On with the fast mode (`ConnectedFastMode`); `pipelineOverride` for tests,
+    /// `MAILIN_PIPELINED_PAGES=1` to run a whole test suite with it on.
+    var pipelineOverride: Bool?
+    func setPipelineOverride(_ on: Bool?) { pipelineOverride = on }
+    static let pipelineForcedByEnvironment = ProcessInfo.processInfo.environment["MAILIN_PIPELINED_PAGES"] == "1"
+    var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
+    /// Pages being saved at once (the one finishing and the next).
+    public private(set) var peakPagesInFlight = 0
+
+    /// What stays exact:
+    ///  • a page's checkpoint is written only after that page AND every
+    ///    earlier page are saved, in order — a stop or crash resumes from the
+    ///    last fully saved page (later saved messages are only observed again);
+    ///  • a message listed on both overlapping pages is downloaded once: the
+    ///    newer page's copy waits until the older page is done, then is only
+    ///    observed (its folder memberships are added);
+    ///  • at most two pages are held; downloads stay bounded by the slots;
+    ///  • a stop (pause, full disk, Cancel sync) cancels both pages and waits
+    ///    for them before it is reported, so nothing writes after the run ends.
+    private func enumeratePipelined(_ folder: RemoteFolderOccurrence, scope: String, from start: String?,
+                                    generation: String, runID: String) async throws {
+        let bag = PageTaskBag()
+        try await withTaskCancellationHandler {
+            var cursor = start
+            var previous: (task: Task<Void, Error>, next: String?, keys: Set<String>, mark: Int64)?
+            do {
+                repeat {
+                    let page = try await listPage(folder, cursor: cursor)
+                    let entries = page.items.map { ($0, $0.folder.map { [$0] } ?? [folder]) }
+                    let busy = previous?.keys ?? []
+                    var now: [(RemoteItemRef, [RemoteFolderOccurrence])] = []
+                    var later: [(RemoteItemRef, [RemoteFolderOccurrence])] = []
+                    for entry in entries {
+                        if busy.contains(try entry.0.identity.key()) { later.append(entry) } else { now.append(entry) }
+                    }
+                    let keys = Set(try now.map { try $0.0.identity.key() })
+                    // Listed here, in page order, before the page's downloads start:
+                    // the page's checkpoint waits for exactly these (and earlier) items.
+                    try await sink.recordDiscovered(runID: runID, identities: now.map(\.0.identity))
+                    let mark = try await sink.discoveredWatermark(runID: runID)
+                    let batch = now
+                    let task = Task { try await self.process(batch, runID: runID) }
+                    bag.add(task)
+                    peakPagesInFlight = max(peakPagesInFlight, previous == nil ? 1 : 2)
+                    if let previous {
+                        do { try await previous.task.value } catch {
+                            task.cancel(); _ = try? await task.value
+                            throw error
+                        }
+                        try await checkpointPage(scope, next: previous.next, generation: generation, runID: runID,
+                                                 discoveredUpTo: previous.mark)
+                    }
+                    // The older page is saved: its duplicates here are only observed now.
+                    if !later.isEmpty {
+                        do { try await process(later, runID: runID) } catch {
+                            task.cancel(); _ = try? await task.value
+                            throw error
+                        }
+                    }
+                    previous = (task, page.nextCursor, keys, mark)
+                    cursor = page.nextCursor
+                } while cursor != nil
+                if let last = previous {
+                    previous = nil
+                    try await last.task.value
+                    try await checkpointPage(scope, next: last.next, generation: generation, runID: runID,
+                                             discoveredUpTo: last.mark)
+                }
+            } catch {
+                if let previous { previous.task.cancel(); _ = try? await previous.task.value }
+                throw error
+            }
+        } onCancel: {
+            bag.cancelAll()
         }
     }
 
@@ -1118,5 +1212,22 @@ extension SyncEngine {
         case .failed(let why): return .failed(why)
         case .aborted: return .aborted
         }
+    }
+}
+
+/// DL-03: the page tasks of one pipelined walk, cancelled together when the run is.
+private final class PageTaskBag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var tasks: [Task<Void, Error>] = []
+    private var cancelled = false
+
+    func add(_ task: Task<Void, Error>) {
+        let already: Bool = lock.withLock { tasks.append(task); return cancelled }
+        if already { task.cancel() }
+    }
+
+    func cancelAll() {
+        let all: [Task<Void, Error>] = lock.withLock { cancelled = true; return tasks }
+        for task in all { task.cancel() }
     }
 }

@@ -119,6 +119,10 @@ actor FakeMailProvider: MailProviderAdapter {
     func failNextRequests(_ errors: [MailProviderError]) { requestFailures = errors }
     func setRequiredToken(_ token: String?) { requiredToken = token }
     func setFetchDelay(_ ns: UInt64) { fetchDelayNanoseconds = ns }
+    /// Every `every`-th download takes `ns` longer (a slow message on a real network).
+    func setSlowFetch(every: Int, extra ns: UInt64) { slowEvery = every; slowExtra = ns }
+    private var slowEvery = 0
+    private var slowExtra: UInt64 = 0
     func setMaxConcurrent(_ n: Int) { maxConcurrent = n }
 
     var liveIDs: Set<String> { Set(messages.keys) }
@@ -210,6 +214,7 @@ actor FakeMailProvider: MailProviderAdapter {
         maxInFlight = max(maxInFlight, inFlight)
         defer { inFlight -= 1 }
         if fetchDelayNanoseconds > 0 { try await Task.sleep(nanoseconds: fetchDelayNanoseconds) }
+        if slowEvery > 0, fetchCount % slowEvery == 0 { try await Task.sleep(nanoseconds: slowExtra) }
         if var queue = fetchFailures[id], !queue.isEmpty {
             let error = queue.removeFirst()
             fetchFailures[id] = queue

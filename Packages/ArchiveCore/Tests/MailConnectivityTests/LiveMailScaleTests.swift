@@ -59,6 +59,41 @@ final class LiveMailScaleTests: XCTestCase {
         if !batch.isEmpty { try await store.insertBatch(batch, batchSize: 2_000) }
     }
 
+    /// DL-03: the same live account with a network-like download time (every
+    /// download 2 ms, every 50th 150 ms), page by page and with overlapping
+    /// pages. MAILIN_LIVE_SCALE_MESSAGES sets the size (default 5,000).
+    func testContinuousQueue_againstPageByPage_onASlowNetwork() async throws {
+        let count = Self.size("MAILIN_LIVE_SCALE_MESSAGES", 5_000)
+        var seconds: [Bool: TimeInterval] = [:]
+        for pipelined in [false, true] {
+            let sink = ConnectedArchiveSink(storeDirectory: dir.appendingPathComponent("q\(pipelined)", isDirectory: true))
+            let fake = FakeMailProvider(pageSize: 500)
+            for f in 0..<5 { await fake.addFolder("f\(f)", path: "Folder \(f)") }
+            for i in 0..<count { await fake.seed("m\(i)", folders: ["f\(i % 5)"]) }
+            await fake.setFetchDelay(2_000_000)
+            await fake.setSlowFetch(every: 50, extra: 150_000_000)
+            try await sink.saveAccount(ConnectedAccountRecord(
+                accountID: fake.accountID, provider: .gmail, issuer: "https://accounts.google.com",
+                displayIdentity: "q@example.com", enabledModes: ["capture"], connectionState: "connected",
+                createdAt: Date(), updatedAt: Date()))
+            let engine = SyncEngine(adapter: fake, sink: sink, scheduler: FairDownloadScheduler(totalSlots: 4), tokens: nil,
+                                    permission: { _ in },
+                                    backoff: BackoffPolicy(base: 1, maximum: 1, transientAttempts: 2, maximumThrottleWait: 1,
+                                                           jitter: { 0 }, sleep: { _ in await Task.yield() }),
+                                    storage: StorageProbe(reserveBytes: 1_024, availableBytes: { _ in 1 << 40 }))
+            await engine.setPipelineOverride(pipelined)
+            let (report, s) = await time("\(pipelined ? "overlapping pages" : "page by page"), \(count) messages") { await engine.sync() }
+            XCTAssertEqual(report.outcome, .completed)
+            XCTAssertEqual(report.receipt?.stored, count)
+            let fetched = await fake.fetched
+            XCTAssertEqual(fetched.count, count, "each message downloaded once")
+            seconds[pipelined] = s
+        }
+        let before = seconds[false] ?? 0, after = seconds[true] ?? 0
+        print("[live-scale] continuous queue: \(String(format: "%.1f", before)) s -> \(String(format: "%.1f", after)) s (\(String(format: "%.0f", (1 - after / max(before, 0.001)) * 100)) % less)")
+        XCTAssertLessThan(after, before, "overlapping pages are faster on a network with slow messages")
+    }
+
     func testLargeLiveAccount_onAnArchiveWithAnImportedLoad_everyPageCallStaysFast() async throws {
         let importedCount = Self.size("MAILIN_LIVE_SCALE_IMPORTED", 20_000)
         let liveCount = Self.size("MAILIN_LIVE_SCALE_MESSAGES", 20_000)

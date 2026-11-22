@@ -114,6 +114,104 @@ final class SyncEngineTests: XCTestCase {
         }
     }
 
+    // MARK: DL-03 — continuous queue (pages overlap)
+
+    /// Repeats the previous page's last message at the top of the next page —
+    /// what Outlook's `$skip` paging does when mail moves during a walk.
+    actor OverlappingPages: MailProviderAdapter {
+        let inner: FakeMailProvider
+        private var lastOfPage: [String: RemoteItemRef] = [:]
+        init(_ inner: FakeMailProvider) { self.inner = inner }
+        nonisolated var accountID: UUID { inner.accountID }
+        nonisolated var provider: MailProviderKind { .gmail }
+        nonisolated var mailHost: String { "gmail.googleapis.com" }
+        nonisolated var authorizationHost: String? { nil }
+        nonisolated var tokenAudience: String? { nil }
+        func limits() async -> ProviderLimits { await inner.limits() }
+        func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {
+            try await inner.listFolders(pageToken: pageToken, context: context)
+        }
+        func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
+                       context: ProviderRequestContext) async throws -> EnumerationPage {
+            var page = try await inner.enumerate(folder: folder, cursor: cursor, pageSize: pageSize, context: context)
+            if cursor != nil, let repeated = lastOfPage[folder.serverID] { page.items.insert(repeated, at: 0) }
+            lastOfPage[folder.serverID] = page.items.last
+            return page
+        }
+        func fetchRaw(_ item: RemoteItemRef, into sink: RawByteSink, context: ProviderRequestContext) async throws -> FetchedItemMetadata {
+            try await inner.fetchRaw(item, into: sink, context: context)
+        }
+        func changeBoundary(scope: ChangeScope, context: ProviderRequestContext) async throws -> String {
+            try await inner.changeBoundary(scope: scope, context: context)
+        }
+        func changes(scope: ChangeScope, since token: String, context: ProviderRequestContext) async throws -> ChangePage {
+            try await inner.changes(scope: scope, since: token, context: context)
+        }
+    }
+
+    func testDL03_pagesOverlap_everyMessageOnce_aRepeatedMessageDownloadedOnce() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 10)
+        await seed(fake, folders: 3, perFolder: 47)                // 141 messages, 5 pages per folder
+        await fake.setFetchDelay(1_000_000)
+        try await register(fake, in: sink)
+        let wrapped = OverlappingPages(fake)
+        let engine = SyncEngine(adapter: wrapped, sink: sink, scheduler: FairDownloadScheduler(totalSlots: 4), tokens: nil,
+                                permission: { _ in }, backoff: Self.backoff(Box([])), storage: Self.plenty)
+        await engine.setPipelineOverride(true)
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed)
+        XCTAssertEqual(report.receipt?.stored, 141)
+        let pagesAtOnce = await engine.peakPagesInFlight
+        XCTAssertEqual(pagesAtOnce, 2, "the next page is saved while the previous one finishes")
+        let fetched = await fake.fetched
+        XCTAssertEqual(fetched.count, 141, "a message listed on two overlapping pages is downloaded once")
+        XCTAssertEqual(Set(fetched).count, 141)
+        let ids = try await capturedIDs(sink, account: fake.accountID)
+        let live = await fake.liveIDs
+        XCTAssertEqual(Set(ids), live)
+        XCTAssertEqual(ids.count, 141)
+        for f in 0..<3 {
+            let cp = try await sink.checkpoint(accountID: fake.accountID, scope: "enum:f\(f)")
+            XCTAssertEqual(cp?.bootstrapState.hasPrefix("enumerated@"), true, "every folder's walk is recorded as finished")
+        }
+        XCTAssertTrue(stagedFiles(sink).isEmpty)
+        // A second run only confirms.
+        let again = await engine.sync()
+        XCTAssertEqual(again.outcome, .completed)
+        XCTAssertEqual(again.receipt?.stored, 0)
+        let refetched = await fake.fetched
+        XCTAssertEqual(refetched.count, 141)
+    }
+
+    func testDL03_aStopWhileTwoPagesRun_neverCheckpointsAnUnfinishedPage_resumeIsExact() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 8)
+        await seed(fake, folders: 2, perFolder: 30)
+        await fake.setFetchDelay(2_000_000)
+        try await register(fake, in: sink)
+        let engine = makeEngine(fake, sink)
+        await engine.setPipelineOverride(true)
+        let task = Box<Task<SyncRunReport, Never>?>(nil)
+        await fake.on(.beforeFetchNumber(13), [.run { task.value?.cancel() }])   // inside the second page
+        let running = Task { await engine.sync() }
+        task.mutate { $0 = running }
+        let report = await running.value
+        XCTAssertEqual(report.outcome, .cancelled)
+        XCTAssertTrue(stagedFiles(sink).isEmpty, "nothing is left half-written after the stop")
+        if let cp = try await sink.checkpoint(accountID: fake.accountID, scope: "enum:f0"), cp.bootstrapState.hasPrefix("enumerating@") {
+            // The saved position never passes a message that was not saved.
+            let saved = Set(try await capturedIDs(sink, account: fake.accountID))
+            let upTo = Int(cp.cursor) ?? 0
+            for i in 0..<upTo { XCTAssertTrue(saved.contains("f0-\(i)"), "f0-\(i) is before the saved position, so it is saved") }
+        }
+        await engine.setPipelineOverride(true)
+        let resumed = await engine.sync()
+        XCTAssertEqual(resumed.outcome, .completed)
+        let ids = try await capturedIDs(sink, account: fake.accountID)
+        XCTAssertEqual(ids.count, 60); XCTAssertEqual(Set(ids).count, 60)
+    }
+
     // MARK: DL-01 — what a person reads first is saved first
 
     func testDL01_folderPriority_allMailInboxSentFirst_restInProviderOrder() {
