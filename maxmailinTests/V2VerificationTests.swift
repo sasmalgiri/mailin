@@ -14143,6 +14143,51 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(source.contains("if self.folders[a.id] != folders { self.folders[a.id] = folders }"), "nor unchanged folder counts")
     }
 
+    /// DL-02 (owner 2026-11-23, download-manager techniques): speed and time left
+    /// are measured from the saved count and bytes over the last 30 s — nothing is
+    /// shown before progress is seen, a count that goes down starts again, and the
+    /// time left is given only when the server's list is complete.
+    func testTransferMeter_speedAndTimeLeft_fromSavedCountsOverTheWindow() throws {
+        let id = UUID()
+        let t0 = Date(timeIntervalSince1970: 1_000_000)
+        var meter = MailTransferMeter()
+        meter.record(id, saved: 100, bytes: 1_000_000, at: t0)
+        XCTAssertNil(meter.rate(id, remaining: 900), "one reading is not a speed")
+        meter.record(id, saved: 100, bytes: 1_000_000, at: t0.addingTimeInterval(2))
+        XCTAssertNil(meter.rate(id, remaining: 900), "no progress yet: nothing is promised")
+        meter.record(id, saved: 120, bytes: 3_000_000, at: t0.addingTimeInterval(4))
+        let r = try XCTUnwrap(meter.rate(id, remaining: 880))
+        XCTAssertEqual(r.messagesPerSecond, 5, accuracy: 0.001)            // 20 in 4 s
+        XCTAssertEqual(r.bytesPerSecond, 500_000, accuracy: 0.1)
+        XCTAssertEqual(try XCTUnwrap(r.secondsLeft), 176, accuracy: 0.01)   // 880 / 5
+        XCTAssertNil(meter.rate(id, remaining: nil)?.secondsLeft, "list not complete: speed only")
+
+        // Only the last 30 s count: a fast start does not flatter a slow middle.
+        for step in 3...40 { meter.record(id, saved: 120 + step, bytes: 3_000_000, at: t0.addingTimeInterval(Double(step) * 2)) }
+        let slow = try XCTUnwrap(meter.rate(id, remaining: 100))
+        XCTAssertEqual(slow.messagesPerSecond, 0.5, accuracy: 0.05)
+        XCTAssertLessThanOrEqual(meter.samples[id]?.count ?? 0, 17)
+
+        // A count that went down (a new run) starts the measurement again; forget clears it.
+        meter.record(id, saved: 5, bytes: 10, at: t0.addingTimeInterval(100))
+        XCTAssertNil(meter.rate(id, remaining: 10))
+        meter.forget(id)
+        XCTAssertNil(meter.samples[id])
+
+        let line = MailTransferText.line(MailTransferRate(messagesPerSecond: 12.4, bytesPerSecond: 3_400_000, secondsLeft: 25 * 60))
+        XCTAssertTrue(line.contains("12") && line.contains("/s") && line.contains("25"), line)
+        XCTAssertEqual(line.components(separatedBy: " · ").count, 3, "speed · bytes · time left")
+        XCTAssertEqual(MailTransferText.line(MailTransferRate(messagesPerSecond: 2.5, bytesPerSecond: 0, secondsLeft: 30)),
+                       [String(localized: "\(2.5.formatted(.number.precision(.fractionLength(1)))) messages/s"),
+                        String(localized: "less than a minute left")].joined(separator: " · "))
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let view = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceView.swift"), encoding: .utf8)
+        XCTAssertTrue(view.contains("transfer: model.transferText(snapshot.id))"), "the sidebar shows it under the account")
+        let model = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceModel.swift"), encoding: .utf8)
+        XCTAssertTrue(model.contains("self.measureTransfers(listed)"), "measured on every account refresh")
+    }
+
     /// SYNC-CANCEL-01 (owner 2026-11-23: "can we have a cancel sync button"): while
     /// mail is being saved the toolbar offers Cancel sync; it stops the running
     /// capture, the accounts a Sync now has not reached are not started, and the

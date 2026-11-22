@@ -391,7 +391,8 @@ private struct MailSidebar: View {
                         }
                     } label: {
                         HStack(spacing: Spacing.xxSmall) {
-                            MailAccountBadge(account: snapshot.account, headline: snapshot.headline)
+                            MailAccountBadge(account: snapshot.account, headline: snapshot.headline,
+                                             transfer: model.transferText(snapshot.id))
                             if snapshot.isRunning {
                                 Spacer(minLength: 0)
                                 ProgressView().controlSize(.mini)
@@ -534,6 +535,8 @@ enum MailFolderStyle {
 struct MailAccountBadge: View {
     let account: MailAccount
     var headline: String?
+    /// DL-02: speed and time left while the account saves mail.
+    var transfer: String?
 
     var body: some View {
         HStack(spacing: Spacing.xSmall) {
@@ -545,6 +548,10 @@ struct MailAccountBadge: View {
                 Text(account.displayIdentity).lineLimit(1)
                 if let headline {
                     Text(headline).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                }
+                if let transfer {
+                    Text(transfer).font(.caption2.monospacedDigit()).foregroundStyle(.secondary).lineLimit(1)
+                        .accessibilityIdentifier("mail.sidebar.transfer")
                 }
             }
         }

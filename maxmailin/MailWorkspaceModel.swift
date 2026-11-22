@@ -1115,6 +1115,24 @@ final class MailWorkspaceModel {
     }
 
     /// Accounts and their folders only — what a running capture's progress changes.
+    /// DL-02: speed and time left of each account that is saving mail.
+    private(set) var transferRates: [UUID: MailTransferRate] = [:]
+    private var transferMeter = MailTransferMeter()
+
+    /// The line under a saving account: "12 messages/s · 3.4 MB/s · about 25 min left".
+    func transferText(_ id: UUID) -> String? { transferRates[id].map(MailTransferText.line) }
+
+    func measureTransfers(_ snapshots: [MailAccountSnapshot], at time: Date = Date()) {
+        var rates: [UUID: MailTransferRate] = [:]
+        for snapshot in snapshots {
+            guard snapshot.isRunning, let status = snapshot.status else { transferMeter.forget(snapshot.id); continue }
+            let a = status.completeness.acquisition
+            transferMeter.record(snapshot.id, saved: a.captured, bytes: status.completeness.preservation.bytes, at: time)
+            if let rate = transferMeter.rate(snapshot.id, remaining: a.inventoryKnown ? a.remaining : nil) { rates[snapshot.id] = rate }
+        }
+        if rates != transferRates { transferRates = rates }
+    }
+
     /// LIVE-SCALE-01: a refresh is running / another was asked for meanwhile.
     private(set) var accountsRefreshRunning = false
     private var accountsRefreshPending = false
@@ -1143,6 +1161,7 @@ final class MailWorkspaceModel {
             let all = try await self.backend.accounts()
             let listed = all.filter { $0.account.connectionState != .removed }
             if listed != self.accounts { self.accounts = listed }
+            self.measureTransfers(listed)
             for a in listed {
                 let folders = try await self.backend.folders(a.id)
                 if self.folders[a.id] != folders { self.folders[a.id] = folders }
