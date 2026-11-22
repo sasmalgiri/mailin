@@ -877,12 +877,16 @@ final class ConnectedMailRuntime {
                     // REC-07: arrivals a rule has not decided yet (an earlier
                     // indexing failure, a crash) — the ledger keeps it once-only.
                     _ = await runtime.rules?.catchUp()
-                    await runtime.syncAll()
+                    // DL-05: the launch run follows the person's automatic-sync
+                    // conditions (Wi-Fi only, while charging, at night); then the timer.
+                    await ConnectedSyncScheduler.shared.runIfDue(runtime, forLaunch: true)
+                    ConnectedSyncScheduler.shared.start(runtime)
                 } catch {
                     log.error("connected mail did not start: \(error.localizedDescription, privacy: .public)")
                 }
             }
         } else {
+            ConnectedSyncScheduler.shared.stop()
             shared?.stop()
             shared = nil
             ConnectedMailBackend.discardCached()

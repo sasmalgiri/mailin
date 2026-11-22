@@ -14143,6 +14143,67 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(source.contains("if self.folders[a.id] != folders { self.folders[a.id] = folders }"), "nor unchanged folder counts")
     }
 
+    /// DL-05 (owner 2026-11-23, download-manager techniques: a scheduler): automatic
+    /// sync every N minutes, only on Wi-Fi / wired, only while charging, only at
+    /// night. Off by default; the conditions gate the launch run too; Sync now is
+    /// never gated; the choice is kept across launches.
+    func testAutomaticSync_intervalAndConditions_decideEveryAutomaticRun() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        func at(_ hour: Int, _ minute: Int = 0) -> Date {
+            calendar.date(from: DateComponents(year: 2026, month: 11, day: 23, hour: hour, minute: minute))!
+        }
+        let good = ConnectedSyncConditions(unmeteredNetwork: true, charging: true, now: at(14))
+        var s = ConnectedSyncSchedule()
+        XCTAssertEqual(s.interval, .off, "off by default (rule 15)")
+        XCTAssertFalse(s.wifiOnly || s.whileChargingOnly || s.nightOnly)
+        XCTAssertEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: nil, forLaunch: true, calendar: calendar), .run,
+                       "with no conditions the launch run goes as before")
+        XCTAssertNotEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: nil, forLaunch: false, calendar: calendar), .run,
+                          "no timed runs while the interval is off")
+
+        s.interval = .every30Minutes
+        XCTAssertEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: nil, forLaunch: false, calendar: calendar), .run)
+        XCTAssertNotEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: at(13, 45), forLaunch: false, calendar: calendar), .run,
+                          "15 minutes after the last run: not yet")
+        XCTAssertEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: at(13, 30), forLaunch: false, calendar: calendar), .run,
+                       "30 minutes after: due")
+
+        s.wifiOnly = true
+        let cellular = ConnectedSyncConditions(unmeteredNetwork: false, charging: true, now: at(14))
+        XCTAssertEqual(ConnectedSyncGate.decide(s, cellular, lastAutomatic: nil, forLaunch: true, calendar: calendar),
+                       .wait(String(localized: "Waiting for Wi-Fi: automatic sync does not use mobile data")),
+                       "the launch run waits on mobile data too")
+        s.whileChargingOnly = true
+        let battery = ConnectedSyncConditions(unmeteredNetwork: true, charging: false, now: at(14))
+        XCTAssertEqual(ConnectedSyncGate.decide(s, battery, lastAutomatic: nil, forLaunch: false, calendar: calendar),
+                       .wait(String(localized: "Waiting for power: automatic sync runs while charging")))
+        s.nightOnly = true
+        XCTAssertEqual(ConnectedSyncGate.decide(s, good, lastAutomatic: nil, forLaunch: false, calendar: calendar),
+                       .wait(String(localized: "Waiting for night: automatic sync runs between 10 pm and 7 am")))
+        for (hour, night) in [(21, false), (22, true), (23, true), (0, true), (6, true), (7, false), (12, false)] {
+            XCTAssertEqual(ConnectedSyncGate.isNight(at(hour), calendar: calendar), night, "\(hour):00")
+        }
+        let night = ConnectedSyncConditions(unmeteredNetwork: true, charging: true, now: at(23, 30))
+        XCTAssertEqual(ConnectedSyncGate.decide(s, night, lastAutomatic: nil, forLaunch: false, calendar: calendar), .run,
+                       "every condition met: it runs")
+
+        // Kept across launches.
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "dl05-\(UUID().uuidString)"))
+        XCTAssertEqual(ConnectedSyncSchedule.load(defaults), ConnectedSyncSchedule())
+        s.save(defaults)
+        XCTAssertEqual(ConnectedSyncSchedule.load(defaults), s)
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let runtime = try String(contentsOf: root.appendingPathComponent("maxmailin/ConnectedMailRuntime.swift"), encoding: .utf8)
+        XCTAssertTrue(runtime.contains("await ConnectedSyncScheduler.shared.runIfDue(runtime, forLaunch: true)"), "the launch run is gated")
+        XCTAssertTrue(runtime.contains("ConnectedSyncScheduler.shared.start(runtime)") && runtime.contains("ConnectedSyncScheduler.shared.stop()"))
+        let model = try String(contentsOf: root.appendingPathComponent("maxmailin/MailWorkspaceModel.swift"), encoding: .utf8)
+        XCTAssertFalse(model.contains("ConnectedSyncGate"), "Sync now is never gated")
+        let views = try String(contentsOf: root.appendingPathComponent("maxmailin/MailAccountViews.swift"), encoding: .utf8)
+        XCTAssertTrue(views.contains("MailAutomaticSyncSection()"), "the settings are on the Accounts page")
+    }
+
     /// DL-02 (owner 2026-11-23, download-manager techniques): speed and time left
     /// are measured from the saved count and bytes over the last 30 s — nothing is
     /// shown before progress is seen, a count that goes down starts again, and the

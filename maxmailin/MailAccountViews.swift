@@ -202,6 +202,9 @@ struct MailAccountsList: View {
                     }
                 }
             }
+            if !model.accounts.isEmpty {
+                MailAutomaticSyncSection()
+            }
             Section {
                 Button(String(localized: "Add account…")) { sheet = .addAccount }
                 Button(String(localized: "Sign-in details from an earlier version…")) { sheet = .upgrade }
@@ -209,6 +212,34 @@ struct MailAccountsList: View {
             }
         }
         .navigationTitle(String(localized: "Accounts"))
+    }
+}
+
+/// DL-05: when Live Mail saves new mail by itself.
+struct MailAutomaticSyncSection: View {
+    @State private var schedule = ConnectedSyncSchedule.load()
+
+    var body: some View {
+        Section {
+            Picker(String(localized: "Automatic sync"), selection: $schedule.interval) {
+                ForEach(ConnectedSyncSchedule.Interval.allCases) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("mail.schedule.interval")
+            Toggle(String(localized: "Only on Wi-Fi or a wired network"), isOn: $schedule.wifiOnly)
+                .accessibilityIdentifier("mail.schedule.wifiOnly")
+            Toggle(String(localized: "Only while charging"), isOn: $schedule.whileChargingOnly)
+                .accessibilityIdentifier("mail.schedule.charging")
+            Toggle(String(localized: "Only at night (10 pm – 7 am)"), isOn: $schedule.nightOnly)
+                .accessibilityIdentifier("mail.schedule.night")
+            if let reason = ConnectedSyncScheduler.shared.lastWaitReason, schedule.interval != .off {
+                Text(reason).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Automatic sync")
+        } footer: {
+            Text("The conditions also apply when mailin opens. Sync now always runs.")
+        }
+        .onChange(of: schedule) { _, new in new.save() }
     }
 }
 
