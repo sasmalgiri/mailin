@@ -67,6 +67,10 @@ public struct IMAPAccountConfiguration: Sendable, Equatable {
     /// plaintext, connect again with STARTTLS (required before any sign-in;
     /// a certificate failure never falls back, plaintext sign-in never happens).
     public var startTLSFallback: Bool
+    /// DL-01 (owner 2026-11-23): list each folder newest first (highest UID down),
+    /// so recent mail is saved first. An enumeration already in progress in the
+    /// older oldest-first order finishes in that order (its cursor says so).
+    public var newestFirst: Bool = true
 
     public init(host: String, port: UInt16 = 993, security: IMAPSecurity = .implicitTLS, login: String,
                 auth: IMAPAuthMethod = .password, maxConnections: Int = 2, pageSize: Int = 500,
@@ -186,6 +190,25 @@ struct IMAPEnumerationCursor: Equatable {
         let f = IMAPChangeToken.fields(s)
         guard f["imap1"] != nil, let v = f["v"].flatMap({ UInt32($0) }), let a = f["after"].flatMap({ UInt32($0) }) else { return nil }
         uidValidity = v; after = a; window = f["w"].flatMap { UInt32($0) } ?? 0
+    }
+}
+
+/// DL-01: a newest-first walk — every UID below `before` is still to be listed.
+struct IMAPDescendingCursor: Equatable {
+    var uidValidity: UInt32
+    var before: UInt32
+    var window: UInt32
+
+    var encoded: String { "imap2;v=\(uidValidity);before=\(before);w=\(window)" }
+
+    init(uidValidity: UInt32, before: UInt32, window: UInt32) {
+        self.uidValidity = uidValidity; self.before = before; self.window = window
+    }
+
+    init?(_ s: String) {
+        let f = IMAPChangeToken.fields(s)
+        guard f["imap2"] != nil, let v = f["v"].flatMap({ UInt32($0) }), let b = f["before"].flatMap({ UInt32($0) }) else { return nil }
+        uidValidity = v; before = b; window = f["w"].flatMap { UInt32($0) } ?? 0
     }
 }
 
@@ -608,6 +631,15 @@ public actor IMAPAdapter: MailProviderAdapter {
             if gmail { self.gmailLocations = [:] }      // only this page's messages
             guard status.exists > 0 else { return EnumerationPage(items: [], nextCursor: nil) }
             let top: UInt32? = status.uidNext.map { $0 > 0 ? $0 - 1 : 0 }
+            // DL-01: newest first, unless this walk began oldest first (an imap1
+            // cursor) or the server gives no UIDNEXT to start from.
+            let descending = cursor.flatMap(IMAPDescendingCursor.init)
+            if let top, descending != nil || (cursor == nil && self.configuration.newestFirst) {
+                var d = descending
+                if let existing = d, existing.uidValidity != status.uidValidity { d = nil }   // start the folder again
+                return try await self.newestFirstPage(s, folder: folder.serverID, validity: status.uidValidity, occ: occ,
+                                                      gmail: gmail, top: top, cursor: d, pageSize: pageSize)
+            }
             var items: [RemoteItemRef] = []
             while true {
                 if let top, after >= top { return EnumerationPage(items: items, nextCursor: nil) }
@@ -648,6 +680,43 @@ public actor IMAPAdapter: MailProviderAdapter {
                 // Sparse UIDs: widen the window (bounded by UIDNEXT).
                 if found.count * 4 < pageSize { window = window > UInt32.max / 2 ? UInt32.max : window * 2 }
             }
+        }
+    }
+
+    /// DL-01: one page of a newest-first walk. Bounded UID ranges below
+    /// `before` (never "n:*"), widened over sparse UIDs like the oldest-first
+    /// walk; the first page starts at the folder's UIDNEXT, later pages at the
+    /// cursor, so arrivals during the walk are left to the change log.
+    private func newestFirstPage(_ s: IMAPSession, folder: String, validity: UInt32, occ: RemoteFolderOccurrence,
+                                 gmail: Bool, top: UInt32, cursor: IMAPDescendingCursor?,
+                                 pageSize: Int) async throws -> EnumerationPage {
+        var before = cursor?.before ?? (top == UInt32.max ? UInt32.max : top + 1)
+        var window = max(UInt32(clamping: pageSize), cursor?.window ?? 0)
+        var items: [RemoteItemRef] = []
+        while true {
+            if before <= 1 { return EnumerationPage(items: items, nextCursor: nil) }
+            let hi = before - 1
+            let lo = hi >= window ? hi - window + 1 : 1
+            let set = "\(lo):\(hi)"
+            let listed: [IMAPGmailListing] = gmail
+                ? try await s.gmailListing(set)
+                : try await s.uidSizes(set).map { IMAPGmailListing(uid: $0.uid, size: $0.size, messageID: nil) }
+            let found = listed.filter { $0.uid >= lo && $0.uid <= hi }.sorted { $0.uid > $1.uid }
+            let room = pageSize - items.count
+            if found.count > room {
+                for f in found.prefix(room) { items.append(listedRef(folder, validity, f, occ)) }
+                before = found[room - 1].uid
+                let next = IMAPDescendingCursor(uidValidity: validity, before: before,
+                                                window: found.count > 2 * pageSize ? max(UInt32(clamping: pageSize), window / 2) : window)
+                return EnumerationPage(items: items, nextCursor: next.encoded)
+            }
+            for f in found { items.append(listedRef(folder, validity, f, occ)) }
+            before = lo
+            if before <= 1 { return EnumerationPage(items: items, nextCursor: nil) }
+            if items.count * 2 >= pageSize {
+                return EnumerationPage(items: items, nextCursor: IMAPDescendingCursor(uidValidity: validity, before: before, window: window).encoded)
+            }
+            if found.count * 4 < pageSize { window = window > UInt32.max / 2 ? UInt32.max : window * 2 }
         }
     }
 

@@ -614,8 +614,36 @@ public actor SyncEngine {
 
     // MARK: Enumeration
 
+    /// DL-01 (owner 2026-11-23): the folder whose walk saves everything (Gmail's
+    /// All Mail) first, then the Inbox, then Sent, then the rest in the provider's
+    /// order — so the mail a person looks at first is saved first. Each folder
+    /// keeps its own checkpoint, so the order can change between runs safely.
+    static func priorityOrder(_ folders: [RemoteFolderOccurrence]) -> [RemoteFolderOccurrence] {
+        func rank(_ f: RemoteFolderOccurrence) -> Int {
+            let use = (f.specialUse ?? "").lowercased()
+            let id = f.serverID.lowercased()
+            if use == "\\all" { return 0 }
+            if use == "inbox" || id == "inbox" { return 1 }
+            if use == "\\sent" || use == "sentitems" || id == "sent" { return 2 }
+            return 3
+        }
+        return folders.enumerated().sorted { a, b in
+            let (ra, rb) = (rank(a.element), rank(b.element))
+            return ra != rb ? ra < rb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// DL-01: within a page, messages over this size (by the provider's size
+    /// hint) download after the others, so one large message does not hold
+    /// back the page's small ones. Order only — every message is saved.
+    static let largeMessageBytes: Int64 = 10 * 1_024 * 1_024
+
+    static func smallFirst(_ downloads: [(RemoteItemRef, [RemoteFolderOccurrence])]) -> [(RemoteItemRef, [RemoteFolderOccurrence])] {
+        downloads.filter { ($0.0.sizeHint ?? 0) <= largeMessageBytes } + downloads.filter { ($0.0.sizeHint ?? 0) > largeMessageBytes }
+    }
+
     private func enumerate(_ folders: [RemoteFolderOccurrence], generation: String, runID: String) async throws {
-        for folder in folders {
+        for folder in Self.priorityOrder(folders) {
             let scope = "enum:\(folder.serverID)"
             var cursor: String?
             if let cp = try await sink.checkpoint(accountID: accountID, scope: scope) {
@@ -728,7 +756,7 @@ public actor SyncEngine {
         }
         guard !downloads.isEmpty else { return }
         try await withThrowingTaskGroup(of: Void.self) { group in
-            for (ref, occurrences) in downloads {
+            for (ref, occurrences) in Self.smallFirst(downloads) {
                 group.addTask { try await self.captureOne(ref, occurrences: occurrences, runID: runID) }
             }
             try await group.waitForAll()

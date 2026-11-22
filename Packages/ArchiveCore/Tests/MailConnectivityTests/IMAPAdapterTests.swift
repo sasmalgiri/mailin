@@ -76,11 +76,12 @@ final class IMAPAdapterTests: XCTestCase {
                      password: String? = nil, security: IMAPSecurity = .plaintextLoopbackOnly, host: String = "127.0.0.1",
                      pageSize: Int = 500, maxConnections: Int = 2, permission: NetworkPermission? = nil,
                      reconnectSleeps: Box<[TimeInterval]>? = nil, timeout: TimeInterval = 10, startTLSFallback: Bool = false,
-                     transportFactory: IMAPTransportFactory? = nil) throws -> IMAPAdapter {
+                     transportFactory: IMAPTransportFactory? = nil, newestFirst: Bool = true) throws -> IMAPAdapter {
         try credentials.write(Data((password ?? server.model.password).utf8), kind: .password, account: account)
-        let config = IMAPAccountConfiguration(host: host, port: server.port, security: security, login: server.model.login,
+        var config = IMAPAccountConfiguration(host: host, port: server.port, security: security, login: server.model.login,
                                               maxConnections: maxConnections, pageSize: pageSize, timeout: timeout,
                                               startTLSFallback: startTLSFallback)
+        config.newestFirst = newestFirst
         let sleeps = reconnectSleeps
         return IMAPAdapter(accountID: account, configuration: config, credentials: credentials,
                            transportFactory: transportFactory ?? IMAPTransports.system, permission: permission,
@@ -691,7 +692,7 @@ final class IMAPAdapterTests: XCTestCase {
             expectedUIDs.append(model.add(Self.message("s-\(i)"), to: "INBOX"))
             model.skipUIDs(UInt32(i % 3 == 0 ? 10_000 : 1), in: "INBOX")
         }
-        let adapter = try makeAdapter(server, pageSize: 4)
+        let adapter = try makeAdapter(server, pageSize: 4, newestFirst: false)   // the oldest-first walk (kept for walks begun in it)
         let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
         let folders = try await adapter.listFolders(pageToken: nil, context: ctx)
         var listed: [UInt32] = []
@@ -707,6 +708,65 @@ final class IMAPAdapterTests: XCTestCase {
         XCTAssertEqual(listed, expectedUIDs, "complete, ordered, no duplicates")
         XCTAssertFalse(model.transcript.contains { $0.contains("UID FETCH") && $0.contains(":*") }, "bounded ranges only")
         await adapter.disconnect()
+    }
+
+    /// DL-01 (owner 2026-11-23): each folder is listed newest first — every
+    /// message once, highest UID first, in bounded ranges over sparse UIDs.
+    func testNewestFirst_sparseUIDs_everyMessageOnce_highestFirst_boundedRanges() async throws {
+        let server = try await startServer()
+        let model = server.model
+        model.addMailbox("INBOX")
+        var expectedUIDs: [UInt32] = []
+        for i in 0..<25 {
+            expectedUIDs.append(model.add(Self.message("n-\(i)"), to: "INBOX"))
+            model.skipUIDs(UInt32(i % 3 == 0 ? 10_000 : 1), in: "INBOX")
+        }
+        let adapter = try makeAdapter(server, pageSize: 4)
+        let ctx = ProviderRequestContext(accountID: adapter.accountID, accessToken: nil, attempt: 0)
+        let folders = try await adapter.listFolders(pageToken: nil, context: ctx)
+        var listed: [UInt32] = []
+        var cursor: String?
+        var pages = 0
+        repeat {
+            let page = try await adapter.enumerate(folder: folders.folders[0], cursor: cursor, pageSize: 4, context: ctx)
+            XCTAssertLessThanOrEqual(page.items.count, 4)
+            for item in page.items { if case .imap(_, _, let u) = item.identity { listed.append(u) } }
+            if let c = page.nextCursor { XCTAssertTrue(c.hasPrefix("imap2;"), "a newest-first cursor") }
+            cursor = page.nextCursor
+            pages += 1
+        } while cursor != nil && pages < 1_000
+        XCTAssertEqual(listed, expectedUIDs.reversed(), "complete, newest first, no duplicates")
+        XCTAssertFalse(model.transcript.contains { $0.contains("UID FETCH") && $0.contains(":*") }, "bounded ranges only")
+        await adapter.disconnect()
+    }
+
+    /// DL-01: a walk saved part-way in the old oldest-first order (an imap1
+    /// cursor, e.g. before the update) finishes oldest first — nothing skipped.
+    func testNewestFirst_aWalkBegunOldestFirst_finishesInThatOrder() async throws {
+        let server = try await startServer()
+        let model = server.model
+        model.addMailbox("INBOX")
+        var uids: [UInt32] = []
+        for i in 0..<12 { uids.append(model.add(Self.message("o-\(i)"), to: "INBOX")) }
+        let old = try makeAdapter(server, pageSize: 4, newestFirst: false)
+        let ctx = ProviderRequestContext(accountID: old.accountID, accessToken: nil, attempt: 0)
+        let folders = try await old.listFolders(pageToken: nil, context: ctx)
+        let first = try await old.enumerate(folder: folders.folders[0], cursor: nil, pageSize: 4, context: ctx)
+        await old.disconnect()
+        let saved = try XCTUnwrap(first.nextCursor)
+        XCTAssertTrue(saved.hasPrefix("imap1;"))
+
+        let updated = try makeAdapter(server, pageSize: 4)          // newest first by default now
+        let folders2 = try await updated.listFolders(pageToken: nil, context: ctx)
+        var listed: [UInt32] = first.items.compactMap { if case .imap(_, _, let u) = $0.identity { return u } else { return nil } }
+        var cursor: String? = saved
+        while let c = cursor {
+            let page = try await updated.enumerate(folder: folders2.folders[0], cursor: c, pageSize: 4, context: ctx)
+            for item in page.items { if case .imap(_, _, let u) = item.identity { listed.append(u) } }
+            cursor = page.nextCursor
+        }
+        XCTAssertEqual(listed, uids, "the resumed walk continues oldest first and lists every message once")
+        await updated.disconnect()
     }
 
     func testIDLE_reportsArrival_andTimesOut() async throws {

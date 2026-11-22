@@ -114,6 +114,56 @@ final class SyncEngineTests: XCTestCase {
         }
     }
 
+    // MARK: DL-01 — what a person reads first is saved first
+
+    func testDL01_folderPriority_allMailInboxSentFirst_restInProviderOrder() {
+        func f(_ id: String, _ use: String? = nil) -> RemoteFolderOccurrence {
+            RemoteFolderOccurrence(serverID: id, displayPath: id, kind: .folder, specialUse: use)
+        }
+        let imap = [f("Archive", "\\Archive"), f("Projects"), f("Sent Items", "\\Sent"), f("INBOX", "INBOX"), f("Notes")]
+        XCTAssertEqual(SyncEngine.priorityOrder(imap).map(\.serverID), ["INBOX", "Sent Items", "Archive", "Projects", "Notes"])
+        let gmailIMAP = [f("INBOX", "INBOX"), f("[Gmail]/Sent Mail", "\\Sent"), f("[Gmail]/All Mail", "\\All"), f("Work")]
+        XCTAssertEqual(SyncEngine.priorityOrder(gmailIMAP).map(\.serverID), ["[Gmail]/All Mail", "INBOX", "[Gmail]/Sent Mail", "Work"],
+                       "All Mail first: its walk saves everything, the other folders only add memberships")
+        let graph = [f("AAMk-1", "drafts"), f("AAMk-2"), f("AAMk-3", "sentitems"), f("AAMk-4", "inbox")]
+        XCTAssertEqual(SyncEngine.priorityOrder(graph).map(\.serverID), ["AAMk-4", "AAMk-3", "AAMk-1", "AAMk-2"])
+        let gmailAPI = [f("ALL", "\\All"), f("INBOX", "INBOX"), f("SENT", "SENT"), f("Label_1")]
+        XCTAssertEqual(SyncEngine.priorityOrder(gmailAPI).map(\.serverID), ["ALL", "INBOX", "SENT", "Label_1"])
+        XCTAssertEqual(SyncEngine.priorityOrder(imap).count, imap.count, "every folder is kept")
+    }
+
+    func testDL01_withinAPage_largeMessagesLast_everyMessageKept() {
+        let folder = RemoteFolderOccurrence(serverID: "f", displayPath: "f", kind: .folder, specialUse: nil)
+        func r(_ id: String, _ size: Int64?) -> (RemoteItemRef, [RemoteFolderOccurrence]) {
+            (RemoteItemRef(identity: .gmail(messageID: id), folder: folder, sizeHint: size), [folder])
+        }
+        let big = SyncEngine.largeMessageBytes + 1
+        let page = [r("a", big), r("b", 2_000), r("c", nil), r("d", big * 3), r("e", SyncEngine.largeMessageBytes)]
+        let ordered = SyncEngine.smallFirst(page).map { entry -> String in
+            guard case .gmail(let id) = entry.0.identity else { return "?" }
+            return id
+        }
+        XCTAssertEqual(ordered, ["b", "c", "e", "a", "d"], "small and unknown sizes in listing order, then the large ones")
+    }
+
+    func testDL01_aSyncStillSavesEveryMessage_inboxFolderFirst() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 10)
+        await fake.addFolder("other", path: "Other")
+        await fake.addFolder("INBOX", path: "Inbox")
+        for i in 0..<30 { await fake.seed("o\(i)", folders: ["other"]) }
+        for i in 0..<30 { await fake.seed("i\(i)", folders: ["INBOX"]) }
+        try await register(fake, in: sink)
+        let report = await makeEngine(fake, sink).sync()
+        XCTAssertEqual(report.outcome, .completed)
+        XCTAssertEqual(report.receipt?.stored, 60)
+        let fetched = await fake.fetched
+        XCTAssertEqual(fetched.count, 60)
+        XCTAssertTrue(fetched.prefix(30).allSatisfy { $0.hasPrefix("i") }, "the Inbox (added second) is saved first")
+        let ids = try await capturedIDs(sink, account: fake.accountID)
+        XCTAssertEqual(Set(ids).count, 60)
+    }
+
     // MARK: T08 — > 5,000 messages, > 50 folders
 
     func testT08_moreThan5000MessagesAnd55Folders_everyPageEnumerated_boundedMemory() async throws {

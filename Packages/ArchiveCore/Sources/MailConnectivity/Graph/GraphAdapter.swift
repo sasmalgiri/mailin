@@ -558,7 +558,9 @@ public actor GraphAdapter: MailProviderAdapter {
 
     func firstPage(_ folder: RemoteFolderOccurrence, pageSize: Int) throws -> URL {
         try url(["mailFolders", folder.serverID, "messages"],
-                query: [("$select", Self.messageSelect), ("$top", String(max(1, pageSize)))])
+                // DL-01: newest first (Graph's default order is not documented as such).
+                query: [("$select", Self.messageSelect), ("$top", String(max(1, pageSize))),
+                        ("$orderby", "receivedDateTime desc")])
     }
 
     public func enumerate(folder: RemoteFolderOccurrence, cursor: String?, pageSize: Int,
