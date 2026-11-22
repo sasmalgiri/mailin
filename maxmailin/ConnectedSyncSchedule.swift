@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import MailConnectivity
 import Network
 #if os(macOS)
 import IOKit.ps
@@ -34,10 +35,39 @@ struct ConnectedSyncSchedule: Codable, Equatable {
         }
     }
 
+    /// DL-06: the average download speed cap for every account together.
+    enum SpeedLimit: Int, Codable, CaseIterable, Identifiable {
+        case none = 0, oneMB = 1, fiveMB = 5, tenMB = 10, twentyFiveMB = 25
+        var id: Int { rawValue }
+        var bytesPerSecond: Int64 { Int64(rawValue) * 1_000_000 }
+        var title: String {
+            self == .none ? String(localized: "No limit")
+                : String(localized: "\(ByteCountFormatter.string(fromByteCount: bytesPerSecond, countStyle: .decimal))/s on average")
+        }
+    }
+
     var interval: Interval = .off
     var wifiOnly = false
     var whileChargingOnly = false
     var nightOnly = false
+    var speedLimit: SpeedLimit = .none
+
+    init() {}
+
+    /// Settings saved by an earlier build (without a newer field) still load.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        interval = try c.decodeIfPresent(Interval.self, forKey: .interval) ?? .off
+        wifiOnly = try c.decodeIfPresent(Bool.self, forKey: .wifiOnly) ?? false
+        whileChargingOnly = try c.decodeIfPresent(Bool.self, forKey: .whileChargingOnly) ?? false
+        nightOnly = try c.decodeIfPresent(Bool.self, forKey: .nightOnly) ?? false
+        speedLimit = try c.decodeIfPresent(SpeedLimit.self, forKey: .speedLimit) ?? .none
+    }
+
+    /// DL-06: hands the saved speed limit to the downloads.
+    static func applySpeedLimit(_ schedule: ConnectedSyncSchedule = .load()) async {
+        await BandwidthLimiter.shared.setLimit(bytesPerSecond: schedule.speedLimit.bytesPerSecond)
+    }
 
     /// The night window for `nightOnly`: 22:00 to 07:00, local time.
     static let nightStartsAtHour = 22

@@ -246,6 +246,45 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(subjects[true], subjects[false], "the same records")
     }
 
+    // MARK: DL-06 — speed limiter
+
+    func testDL06_limiter_booksBytesOnOneTimeline() async {
+        let off = BandwidthLimiter()
+        let none = await off.reserve(10_000_000)
+        XCTAssertEqual(none, .zero, "no limit: never waits")
+        let l = BandwidthLimiter(bytesPerSecond: 1_000_000)
+        let first = await l.reserve(500_000)
+        let second = await l.reserve(500_000)
+        let third = await l.reserve(1_000_000)
+        XCTAssertEqual(first, .zero)
+        XCTAssertEqual(Double(second.components.attoseconds) / 1e18 + Double(second.components.seconds), 0.5, accuracy: 0.05)
+        XCTAssertEqual(Double(third.components.attoseconds) / 1e18 + Double(third.components.seconds), 1.0, accuracy: 0.05)
+        await l.setLimit(bytesPerSecond: 0)
+        let afterOff = await l.reserve(5_000_000)
+        XCTAssertEqual(afterOff, .zero, "switching the limit off releases at once")
+    }
+
+    func testDL06_aSyncUnderALimit_keepsTheAverage_andSavesEverything() async throws {
+        var elapsed: [Bool: TimeInterval] = [:]
+        for limited in [false, true] {
+            let sink = makeSink("limit-\(limited)")
+            let fake = FakeMailProvider(pageSize: 10)
+            await fake.setPadding(10_000)                       // ~10 KB per message
+            await seed(fake, folders: 1, perFolder: 30)        // ~300 KB
+            try await register(fake, in: sink)
+            let engine = makeEngine(fake, sink)
+            await engine.setLimiter(BandwidthLimiter(bytesPerSecond: limited ? 300_000 : 0))
+            let start = Date()
+            let report = await engine.sync()
+            elapsed[limited] = Date().timeIntervalSince(start)
+            XCTAssertEqual(report.outcome, .completed)
+            XCTAssertEqual(report.receipt?.stored, 30)
+            XCTAssertTrue(stagedFiles(sink).isEmpty)
+        }
+        XCTAssertGreaterThanOrEqual(elapsed[true] ?? 0, 0.8, "about 300 KB at 300 KB/s takes about a second")
+        XCTAssertLessThan(elapsed[false] ?? 1, (elapsed[true] ?? 0) / 2, "no limit is much faster")
+    }
+
     // MARK: DL-01 — what a person reads first is saved first
 
     func testDL01_folderPriority_allMailInboxSentFirst_restInProviderOrder() {

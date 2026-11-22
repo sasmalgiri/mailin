@@ -879,6 +879,7 @@ final class ConnectedMailRuntime {
                     _ = await runtime.rules?.catchUp()
                     // DL-05: the launch run follows the person's automatic-sync
                     // conditions (Wi-Fi only, while charging, at night); then the timer.
+                    await ConnectedSyncSchedule.applySpeedLimit()      // DL-06
                     await ConnectedSyncScheduler.shared.runIfDue(runtime, forLaunch: true)
                     ConnectedSyncScheduler.shared.start(runtime)
                 } catch {

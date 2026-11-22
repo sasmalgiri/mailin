@@ -696,6 +696,9 @@ public actor SyncEngine {
     static let pipelineForcedByEnvironment = ProcessInfo.processInfo.environment["MAILIN_PIPELINED_PAGES"] == "1"
     var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
     private var sinkPreparesInParallel = false
+    /// DL-06: the speed limit shared by every account (off unless the person sets one).
+    var limiter: BandwidthLimiter = .shared
+    func setLimiter(_ l: BandwidthLimiter) { limiter = l }
     /// Pages being saved at once (the one finishing and the next).
     public private(set) var peakPagesInFlight = 0
 
@@ -920,6 +923,9 @@ public actor SyncEngine {
         reservedForInFlight += need
         defer { reservedForInFlight -= need }
         downloadsAttempted += 1
+        // DL-06: the optional speed limit — a known size waits for its turn first.
+        let hinted = max(0, ref.sizeHint ?? 0)
+        if hinted > 0 { try await limiter.pace(hinted) }
         let bytes = RawByteSink(writer: try sink.makeStagingWriter())
         do {
             let fetched = try await adapter.fetchRaw(ref, into: bytes, context: context)
@@ -932,7 +938,10 @@ public actor SyncEngine {
             for o in occurrences where !all.contains(where: { $0.serverID == o.serverID }) { all.append(o) }
             let item = CaptureItem(accountID: accountID, identity: ref.identity, occurrences: all, raw: staged,
                                    metadata: fetched.metadata)
-            return try await sink.capture(item, runID: runID)
+            let outcome = try await sink.capture(item, runID: runID)
+            // …an unknown (or larger) size is booked once saved, while the slot is still held.
+            if staged.byteCount > hinted { try await limiter.pace(staged.byteCount - hinted) }
+            return outcome
         } catch {
             largestWriteNeed = max(largestWriteNeed, need, 2 * bytes.bytesWritten)
             bytes.discard()

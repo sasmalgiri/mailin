@@ -231,6 +231,11 @@ struct MailAutomaticSyncSection: View {
                 .accessibilityIdentifier("mail.schedule.charging")
             Toggle(String(localized: "Only at night (10 pm – 7 am)"), isOn: $schedule.nightOnly)
                 .accessibilityIdentifier("mail.schedule.night")
+            Picker(String(localized: "Download speed"), selection: $schedule.speedLimit) {
+                ForEach(ConnectedSyncSchedule.SpeedLimit.allCases) { Text($0.title).tag($0) }
+            }
+            .accessibilityIdentifier("mail.schedule.speedLimit")
+            .accessibilityHint(Text("Keeps your internet connection usable during a large sync"))
             if let reason = ConnectedSyncScheduler.shared.lastWaitReason, schedule.interval != .off {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
@@ -239,7 +244,10 @@ struct MailAutomaticSyncSection: View {
         } footer: {
             Text("The conditions also apply when mailin opens. Sync now always runs.")
         }
-        .onChange(of: schedule) { _, new in new.save() }
+        .onChange(of: schedule) { old, new in
+            new.save()
+            if old.speedLimit != new.speedLimit { Task { await ConnectedSyncSchedule.applySpeedLimit(new) } }
+        }
     }
 }
 

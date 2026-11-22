@@ -14204,6 +14204,34 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(views.contains("MailAutomaticSyncSection()"), "the settings are on the Accounts page")
     }
 
+    /// DL-06 (owner 2026-11-23, download-manager techniques: a speed limiter): the
+    /// download speed setting (no limit by default) reaches the shared limiter at
+    /// launch and when changed; settings saved before it existed still load.
+    func testDownloadSpeedLimit_setting_reachesTheLimiter() async throws {
+        XCTAssertEqual(ConnectedSyncSchedule().speedLimit, .none, "no limit by default")
+        XCTAssertEqual(ConnectedSyncSchedule.SpeedLimit.allCases.map(\.bytesPerSecond), [0, 1_000_000, 5_000_000, 10_000_000, 25_000_000])
+        let older = Data(#"{"interval":30,"wifiOnly":true,"whileChargingOnly":false,"nightOnly":false}"#.utf8)
+        let decoded = try JSONDecoder().decode(ConnectedSyncSchedule.self, from: older)
+        XCTAssertEqual(decoded.interval, .every30Minutes)
+        XCTAssertTrue(decoded.wifiOnly)
+        XCTAssertEqual(decoded.speedLimit, .none, "a field added later defaults instead of losing the saved settings")
+
+        var s = ConnectedSyncSchedule()
+        s.speedLimit = .fiveMB
+        await ConnectedSyncSchedule.applySpeedLimit(s)
+        let applied = await BandwidthLimiter.shared.bytesPerSecond
+        XCTAssertEqual(applied, 5_000_000)
+        await ConnectedSyncSchedule.applySpeedLimit(ConnectedSyncSchedule())
+        let cleared = await BandwidthLimiter.shared.bytesPerSecond
+        XCTAssertEqual(cleared, 0)
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let runtime = try String(contentsOf: root.appendingPathComponent("maxmailin/ConnectedMailRuntime.swift"), encoding: .utf8)
+        XCTAssertTrue(runtime.contains("await ConnectedSyncSchedule.applySpeedLimit()"), "applied at launch")
+        let views = try String(contentsOf: root.appendingPathComponent("maxmailin/MailAccountViews.swift"), encoding: .utf8)
+        XCTAssertTrue(views.contains("ConnectedSyncSchedule.applySpeedLimit(new)"), "applied when changed")
+    }
+
     /// DL-02 (owner 2026-11-23, download-manager techniques): speed and time left
     /// are measured from the saved count and bytes over the last 30 s — nothing is
     /// shown before progress is seen, a count that goes down starts again, and the
