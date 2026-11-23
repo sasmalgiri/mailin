@@ -124,6 +124,8 @@ actor FakeMailProvider: MailProviderAdapter {
     private var slowEvery = 0
     private var slowExtra: UInt64 = 0
     func setMaxConcurrent(_ n: Int) { maxConcurrent = n }
+    var adaptiveCeiling: Int?
+    func setAdaptiveCeiling(_ n: Int?) { adaptiveCeiling = n }
 
     var liveIDs: Set<String> { Set(messages.keys) }
     func membership(_ id: String) -> [String]? { messages[id]?.folders }
@@ -173,7 +175,8 @@ actor FakeMailProvider: MailProviderAdapter {
     // MARK: MailProviderAdapter
 
     func limits() async -> ProviderLimits {
-        ProviderLimits(maxConcurrentDownloads: maxConcurrent, pageSize: pageSize, changeTracking: tracking)
+        ProviderLimits(maxConcurrentDownloads: maxConcurrent, pageSize: pageSize, changeTracking: tracking,
+                       adaptiveCeiling: adaptiveCeiling)
     }
 
     func listFolders(pageToken: String?, context: ProviderRequestContext) async throws -> FolderPage {

@@ -246,6 +246,66 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(subjects[true], subjects[false], "the same records")
     }
 
+    // MARK: TOR-02 — adaptive downloads
+
+    func testTOR02_adaptive_growsByOneAfterCleanDownloads_halvesWhenToldToSlowDown() {
+        var a = SyncEngine.AdaptiveDownloads(current: 4, ceiling: 6)
+        for _ in 0..<7 { a.succeeded() }
+        XCTAssertEqual(a.current, 4, "not before 2 × limit clean downloads")
+        a.succeeded()
+        XCTAssertEqual(a.current, 5)
+        for _ in 0..<100 { a.succeeded() }
+        XCTAssertEqual(a.current, 6, "never above the provider's ceiling")
+        a.throttled()
+        XCTAssertEqual(a.current, 3, "halved at the first slow-down")
+        a.throttled(); a.throttled(); a.throttled()
+        XCTAssertEqual(a.current, 1, "never below one")
+    }
+
+    func testTOR02_aSync_probesUpToTheCeiling_neverAbove_andSavesEverything() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 50)
+        await fake.setMaxConcurrent(2)
+        await fake.setAdaptiveCeiling(6)
+        await seed(fake, folders: 2, perFolder: 100)
+        await fake.setFetchDelay(1_000_000)
+        try await register(fake, in: sink)
+        let engine = makeEngine(fake, sink, scheduler: FairDownloadScheduler(totalSlots: 12))
+        await engine.setPipelineOverride(true)
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed)
+        XCTAssertEqual(report.receipt?.stored, 200)
+        let peak = await engine.peakDownloadLimit
+        let inFlight = await fake.maxInFlight
+        XCTAssertEqual(peak, 6, "probed up to the ceiling")
+        XCTAssertGreaterThan(inFlight, 2, "more than the starting number ran at once")
+        XCTAssertLessThanOrEqual(inFlight, 6, "never more than the ceiling")
+    }
+
+    func testTOR02_aSlowDown_halvesTheDownloadsAtOnce_everythingStillSaved() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 20)
+        await fake.setMaxConcurrent(4)
+        await seed(fake, folders: 1, perFolder: 60)
+        for i in [5, 6, 7] { await fake.failFetch("f0-\(i)", with: [.rateLimited(retryAfter: 0)]) }
+        try await register(fake, in: sink)
+        let engine = makeEngine(fake, sink)
+        await engine.setPipelineOverride(true)
+        let report = await engine.sync()
+        XCTAssertEqual(report.outcome, .completed)
+        XCTAssertEqual(report.receipt?.stored, 60)
+        let backoffs = await engine.adaptiveBackoffs
+        let now = await engine.adaptive?.current
+        XCTAssertGreaterThanOrEqual(backoffs, 1, "the slow-down was answered")
+        XCTAssertNotNil(now)
+        XCTAssertLessThanOrEqual(now ?? 9, 4, "never above the provider's own number")
+        // Without the fast mode the fixed number is used, as before.
+        let plain = makeEngine(fake, makeSink("plain"))
+        await plain.setPipelineOverride(false)
+        let plainAdaptive = await plain.adaptive
+        XCTAssertNil(plainAdaptive)
+    }
+
     // MARK: DL-06 — speed limiter
 
     func testDL06_limiter_booksBytesOnOneTimeline() async {

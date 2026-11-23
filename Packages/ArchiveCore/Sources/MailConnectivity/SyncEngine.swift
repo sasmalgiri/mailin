@@ -431,6 +431,8 @@ public actor SyncEngine {
 
     /// The account waits (holding no download slot); other accounts go on.
     private func throttle(retryAfter: TimeInterval?, attempt: Int) async throws {
+        // TOR-02: the provider said slow down — fewer downloads at once from now on.
+        if adaptive != nil { adaptive?.throttled(); adaptiveBackoffs += 1 }
         if throttleGate != nil { try await waitForThrottle(); return }
         let delay = backoff.delay(attempt: attempt, retryAfter: retryAfter)
         guard throttleWaited + delay <= backoff.maximumThrottleWait else {
@@ -696,6 +698,38 @@ public actor SyncEngine {
     static let pipelineForcedByEnvironment = ProcessInfo.processInfo.environment["MAILIN_PIPELINED_PAGES"] == "1"
     var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
     private var sinkPreparesInParallel = false
+
+    // MARK: TOR-02 — adaptive downloads
+
+    /// TOR-02 (owner 2026-11-23, torrent-engine techniques): how many of this
+    /// account's messages download at once adapts like a torrent client's
+    /// connection count — it halves at the first "slow down" (429 / quota) and
+    /// grows back by one after every 2 × limit clean downloads, never above the
+    /// provider's ceiling. With the fast mode only (the continuous queue).
+    struct AdaptiveDownloads: Equatable {
+        var current: Int
+        var ceiling: Int
+        var cleanSince = 0
+        mutating func succeeded() {
+            cleanSince += 1
+            if cleanSince >= current * 2, current < ceiling { current += 1; cleanSince = 0 }
+        }
+        mutating func throttled() { current = max(1, current / 2); cleanSince = 0 }
+    }
+    private(set) var adaptive: AdaptiveDownloads?
+    public private(set) var adaptiveBackoffs = 0
+    public private(set) var peakDownloadLimit = 0
+
+    func downloadLimit() -> Int {
+        guard pipelined else { adaptive = nil; return limits.maxConcurrentDownloads }
+        let ceiling = limits.adaptiveCeiling ?? limits.maxConcurrentDownloads
+        if adaptive == nil || adaptive?.ceiling != ceiling {
+            adaptive = AdaptiveDownloads(current: min(limits.maxConcurrentDownloads, ceiling), ceiling: ceiling)
+        }
+        let limit = adaptive?.current ?? limits.maxConcurrentDownloads
+        peakDownloadLimit = max(peakDownloadLimit, limit)
+        return limit
+    }
     /// DL-07: a broken download is continued only from this many bytes up
     /// (below it, starting again costs less than a second request).
     var partialResumeMinimumBytes: Int64 = 1_048_576
@@ -896,13 +930,13 @@ public actor SyncEngine {
         let partial = PartialDownload()
         defer { partial.discard() }
         do {
-            let limit = limits.maxConcurrentDownloads
             _ = try await perform(.download) { ctx in
-                try await self.scheduler.acquire(account: self.accountID, accountLimit: limit)
+                try await self.scheduler.acquire(account: self.accountID, accountLimit: self.downloadLimit())
                 do {
                     let outcome = try await self.fetchAndCapture(ref, occurrences: occurrences, runID: runID, context: ctx,
                                                                  partial: partial)
                     await self.scheduler.release(account: self.accountID)
+                    self.adaptive?.succeeded()
                     return outcome
                 } catch {
                     await self.scheduler.release(account: self.accountID)

@@ -47,11 +47,16 @@ public struct ProviderLimits: Sendable, Equatable {
     /// Preferred enumeration page size.
     public var pageSize: Int
     public var changeTracking: ChangeTracking
+    /// TOR-02: how far adaptive downloads may probe above `maxConcurrentDownloads`
+    /// while the provider keeps answering (nil = never above it).
+    public var adaptiveCeiling: Int?
 
-    public init(maxConcurrentDownloads: Int = 4, pageSize: Int = 500, changeTracking: ChangeTracking) {
+    public init(maxConcurrentDownloads: Int = 4, pageSize: Int = 500, changeTracking: ChangeTracking,
+                adaptiveCeiling: Int? = nil) {
         self.maxConcurrentDownloads = max(1, maxConcurrentDownloads)
         self.pageSize = max(1, pageSize)
         self.changeTracking = changeTracking
+        self.adaptiveCeiling = adaptiveCeiling.map { max(self.maxConcurrentDownloads, $0) }
     }
 }
 

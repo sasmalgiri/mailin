@@ -89,7 +89,10 @@ public actor GmailAdapter: MailProviderAdapter {
         // FAST-05: more downloads at once when the fast mode is on.
         ProviderLimits(maxConcurrentDownloads: ConnectedFastMode.downloads(normal: options.maxConcurrentDownloads,
                                                                            ceiling: ConnectedFastMode.gmailCeiling),
-                       pageSize: options.pageSize, changeTracking: .accountWide)
+                       pageSize: options.pageSize, changeTracking: .accountWide,
+                       // TOR-02: Gmail's per-user quota leaves room above 8; adaptive
+                       // downloads probe there and halve at the first slow-down.
+                       adaptiveCeiling: ConnectedFastMode.isEnabled ? ConnectedFastMode.gmailAdaptiveCeiling : nil)
     }
 
     /// Every label in one response (labels.list is not paged), plus All Mail.

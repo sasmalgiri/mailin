@@ -32,6 +32,9 @@ public enum ConnectedFastMode {
     }
 
     public static let gmailCeiling = 8
+    /// TOR-02: adaptive downloads may probe up to this for Gmail (still under
+    /// `totalCeiling` for all accounts together) and halve when Google says slow down.
+    public static let gmailAdaptiveCeiling = 12
     public static let imapCeiling = 4
     public static let totalCeiling = 12
 
