@@ -14206,6 +14206,36 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(views.contains("MailAutomaticSyncSection()"), "the settings are on the Accounts page")
     }
 
+    /// CRASH-02 (owner 2026-11-23: "no need to put crash report on app window instead
+    /// put it in some folder and put the path in system ui"): after an unexpected stop
+    /// the report is a file in the diagnostics folder, the window shows no banner for
+    /// it, and Settings ▸ Crash reports names the folder.
+    func testCrashReport_isAFileInTheDiagnosticsFolder_notABannerInTheWindow() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("crash02-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let text = EngineTripCenter.shared.crashReportText(tripped: [.v4FastImport], restored: [])
+        XCTAssertTrue(text.contains("stopped unexpectedly") && text.contains(Capability.v4FastImport.displayName),
+                      "the report says what stopped and which engine was switched off")
+        let file = try XCTUnwrap(DiagnosticsCenter.shared.storeText(text, kind: "crash-report", in: dir))
+        XCTAssertEqual(file.pathExtension, "txt")
+        XCTAssertTrue(file.lastPathComponent.contains("-crash-report"), "counted as a crash report")
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), text)
+        XCTAssertEqual(DiagnosticsCenter.reportFiles(in: dir), [file])
+
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func source(_ name: String) throws -> String { try String(contentsOf: root.appendingPathComponent("maxmailin/\(name)"), encoding: .utf8) }
+        let shell = try source("FourPageShell.swift")
+        XCTAssertFalse(shell.contains("EngineTripBanner()"), "no crash banner in the app window")
+        XCTAssertTrue(shell.contains("SafeModeBanner()"), "Safe Mode (read-only archive) is still shown")
+        XCTAssertTrue(try source("EngineGuard.swift").contains("DiagnosticsCenter.shared.storeText(crashReportText("),
+                      "the launch that finds a trip writes the report")
+        XCTAssertTrue(try source("SettingsView.swift").contains("CrashReportsSection()"), "Settings names the folder")
+        let section = try source("CrashReportsSection.swift")
+        XCTAssertTrue(section.contains("Text(verbatim: folder.path)") && section.contains("DiagnosticsCenter.directory"))
+        XCTAssertTrue(section.contains("NSWorkspace.shared.open(folder)") && section.contains("ShareLink(items: files)"),
+                      "Mac: Show in Finder; iPhone/iPad: Share reports")
+    }
+
     /// DL-06 (owner 2026-11-23, download-manager techniques: a speed limiter): the
     /// download speed setting (no limit by default) reaches the shared limiter at
     /// launch and when changed; settings saved before it existed still load.

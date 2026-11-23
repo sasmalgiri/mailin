@@ -35,13 +35,33 @@ final class DiagnosticsCenter: NSObject, @unchecked Sendable {
         #endif
     }
 
+    /// CRASH-02 (owner 2026-11-23): a crash report as a plain-text file in the
+    /// diagnostics folder (the app window no longer shows a banner for it;
+    /// Settings ▸ Crash reports names the folder). Returns the file written.
+    @discardableResult
+    func storeText(_ text: String, kind: String, in dir: URL = DiagnosticsCenter.directory) -> URL? {
+        store(Data(text.utf8), kind: kind, ext: "txt", in: dir)
+    }
+
+    /// The reports in the folder, newest first.
+    static func reportFiles(in dir: URL = DiagnosticsCenter.directory) -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+            .filter { ["json", "txt"].contains($0.pathExtension) }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+
     func store(_ json: Data, kind: String) {
+        store(json, kind: kind, ext: "json", in: Self.directory)
+    }
+
+    @discardableResult
+    private func store(_ json: Data, kind: String, ext: String, in dir: URL) -> URL? {
         let fm = FileManager.default
-        let dir = Self.directory
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-            try json.write(to: dir.appendingPathComponent("\(stamp)-\(kind).json"), options: .atomic)
+            let file = dir.appendingPathComponent("\(stamp)-\(kind).\(ext)")
+            try json.write(to: file, options: .atomic)
             let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
             let sorted = files.sorted {
                 let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
@@ -49,8 +69,10 @@ final class DiagnosticsCenter: NSObject, @unchecked Sendable {
                 return a > b
             }
             for old in sorted.dropFirst(Self.keepFiles) { try? fm.removeItem(at: old) }
+            return file
         } catch {
             // Diagnostics must never disturb the app.
+            return nil
         }
     }
 

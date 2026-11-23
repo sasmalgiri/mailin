@@ -124,9 +124,11 @@ struct FourPageShell: View {
             .fixedSize(horizontal: false, vertical: true)
             .layoutPriority(1)
             Divider()
-            // §3-M2: an engine the previous launch stopped inside has been
-            // switched off; say so once, with diagnostics to copy.
-            EngineTripBanner()
+            // §3-M2: an engine the previous launch stopped inside is still
+            // switched off by itself; CRASH-02 (owner 2026-11-23): the report
+            // is a file in the diagnostics folder (Settings ▸ Crash reports),
+            // not a banner in the window. Safe Mode stays: it makes the archive
+            // read-only for the launch, which the person must see.
             SafeModeBanner()
             ScopeJobProgressBar()
             page

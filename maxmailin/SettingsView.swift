@@ -555,6 +555,9 @@ struct SettingsView: View {
             }
             #endif
 
+            // CRASH-02: where crash reports are kept (no banner in the window).
+            CrashReportsSection()
+
             // Plan & Purchases: the one purchase section in Settings (it used
             // to be duplicated here and under Advanced with no restore result).
             PlanAndPurchasesSection()

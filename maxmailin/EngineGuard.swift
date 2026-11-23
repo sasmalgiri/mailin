@@ -401,6 +401,10 @@ final class EngineTripCenter {
         }
         newlyRestored = restored
         let leftovers = decision.tripped
+        // CRASH-02: what used to be a banner in the window is a report in the diagnostics folder.
+        if !restored.isEmpty || !leftovers.isEmpty {
+            DiagnosticsCenter.shared.storeText(crashReportText(tripped: leftovers, restored: restored), kind: "crash-report")
+        }
         guard !leftovers.isEmpty else { return }
         for capability in leftovers {
             registry.set(capability, enabled: false)
@@ -413,6 +417,24 @@ final class EngineTripCenter {
 
     func dismiss() { newlyTripped = [] }
     func dismissRestored() { newlyRestored = [] }
+
+    /// CRASH-02: the report written when a launch found engines switched off or back on.
+    func crashReportText(tripped: [Capability], restored: [Capability]) -> String {
+        var lines = ["mailin crash report — \(ISO8601DateFormatter().string(from: Date()))", ""]
+        if !tripped.isEmpty {
+            lines.append("mailin stopped unexpectedly last time while a new engine was running.")
+            lines.append("Switched off and replaced by the previous engine: \(tripped.map(\.displayName).joined(separator: ", ")).")
+            lines.append("Your data was not changed. It can be switched back on in Settings ▸ Modules.")
+            lines.append("")
+        }
+        if !restored.isEmpty {
+            lines.append("Switched back on in this version: \(restored.map(\.displayName).joined(separator: ", ")).")
+            lines.append("They had stopped unexpectedly in an earlier version; if one stops again it is switched off automatically.")
+            lines.append("")
+        }
+        lines.append(diagnosticsText())
+        return lines.joined(separator: "\n")
+    }
 
     /// Plain-text summary for "Copy diagnostics".
     func diagnosticsText() -> String {
