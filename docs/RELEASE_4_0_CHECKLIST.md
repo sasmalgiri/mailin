@@ -65,6 +65,17 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-23: build 1003 replaces 1002
+
+**Upload and submit 4.0 (1003), for Mac and iOS** — it adds to 1002: Cancel sync in the Live Mail toolbar
+(SYNC-CANCEL-01, 77b69f4) and the download-manager work (owner "build all"): newest mail and Inbox first (DL-01),
+speed and time left under a saving account (DL-02), overlapping pages (DL-03) and parallel saving (DL-04) with the
+fast mode, Automatic sync with Wi-Fi-only / while-charging / at-night conditions, off by default (DL-05), a download
+speed limit, none by default (DL-06), and continuing a broken large IMAP download (DL-07). Build number set through
+the target's build settings (all four configurations); version stays 4.0. Checks on this candidate: DeepDiveAppFixes,
+MailWorkspace, ConnectedLifecycleAudit, InterfaceLocalization 54/0 (1 existing skip); package MailConnectivity 192/0
+with the queue on and off. Owner check: Only on Wi-Fi and Only while charging on a real device.
+
 ## Status 2026-11-22 (evening): build 1002 replaces 1001
 
 **Upload and submit 4.0 (1002), for Mac and iOS** — it adds to 1001: CRASH-01 (ac08d4f; the Mac window could
