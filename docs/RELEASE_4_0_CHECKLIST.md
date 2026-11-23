@@ -65,6 +65,22 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-23 (afternoon): 1003 also carries TOR-01/02; release tests run
+
+Since the 1003 note below: TOR-02 adaptive downloads (eb33b8d), TOR-01 endgame mode (2d4f9e3); TOR-03 Gmail batch
+evaluated and not built (51ebf68). Build number unchanged (1003, not uploaded yet). Tests on this candidate:
+- Package `swift test -c release`: 781 run, 26 opt-in skips, 0 failed.
+- MailConnectivity with the fast-mode paths forced on (`MAILIN_PIPELINED_PAGES=1`): 197 run, 2 skips, 0 failed.
+- Five-jobs gate + touched classes (V2CutoverTests, ConnectedFiveJobsTests, ConnectedFiveJobsFixPassTests,
+  DeepDiveAppFixes, MailWorkspace, ConnectedLifecycleAudit, InterfaceLocalization): 277 run, 275 passed,
+  2 owner-bound skips (S/MIME Keychain identity, offline build), 0 failed.
+- Found on the way and fixed in the tests (not the app): ConnectedFiveJobs T14/T15 used a PDF with 19 text
+  characters, which the reader rightly treats as a scanned page, so it passed only when this Mac's attachment-OCR
+  switch was on — the fixture now has a real text layer; the DL-06 timing test compared ratios that a loaded machine
+  stretched — now a relative check plus the limiter's own lower bound. OPEN02 (PST memory) failed twice in the app
+  test host and passed in the quiet gate run; the same PST stream measured alone in the package is flat at 17 MB for
+  all 20 batches (both runs), so the reader keeps nothing — the growth is other work in the test host process.
+
 ## Status 2026-11-23: build 1003 replaces 1002
 
 **Upload and submit 4.0 (1003), for Mac and iOS** — it adds to 1002: Cancel sync in the Live Mail toolbar

@@ -8500,7 +8500,9 @@ final class ConnectedFiveJobsTests: XCTestCase {
                 """.utf8)),
         ])
         let bundle = storedZip([("minutes.docx", docx)])
-        let pdf = V2CutoverTests.pdfData(pages: ["Fixture ledger quorum"])
+        // A real text layer (>= 20 non-space characters on the page): read by PDFKit
+        // whatever this Mac's attachment-OCR switch says (19 counted as a scanned page).
+        let pdf = V2CutoverTests.pdfData(pages: ["Fixture ledger quorum for the annual review"])
         let png = V2CutoverTests.pngData()
         let smime = Data((0..<600).map { UInt8(truncatingIfNeeded: $0 &* 37 &+ 11) })
         let nested = ["From: Ravi <ravi@example.org>", "To: Asha <asha@example.com>", "Subject: Nested note",
