@@ -54,6 +54,14 @@ public actor FairDownloadScheduler {
         }
     }
 
+    /// TOR-01: a slot only if one is free AND nobody is waiting for one — the
+    /// endgame's second request uses idle capacity, never anyone's turn.
+    public func tryAcquire(account: UUID, accountLimit: Int) -> Bool {
+        guard waiting.values.allSatisfy(\.isEmpty), canGrant(account, limit: max(1, accountLimit)) else { return false }
+        grant(account)
+        return true
+    }
+
     public func release(account: UUID) {
         inUse = max(0, inUse - 1)
         perAccount[account] = max(0, (perAccount[account] ?? 1) - 1)

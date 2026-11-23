@@ -121,6 +121,10 @@ actor FakeMailProvider: MailProviderAdapter {
     func setFetchDelay(_ ns: UInt64) { fetchDelayNanoseconds = ns }
     /// Every `every`-th download takes `ns` longer (a slow message on a real network).
     func setSlowFetch(every: Int, extra ns: UInt64) { slowEvery = every; slowExtra = ns }
+    /// TOR-01: the first download of `id` hangs for `ns` (a stuck connection); later ones are normal.
+    func hangFirstFetch(of id: String, for ns: UInt64) { hangOnce[id] = ns }
+    private var hangOnce: [String: UInt64] = [:]
+    private(set) var fetchStarts: [String] = []
     private var slowEvery = 0
     private var slowExtra: UInt64 = 0
     func setMaxConcurrent(_ n: Int) { maxConcurrent = n }
@@ -218,6 +222,8 @@ actor FakeMailProvider: MailProviderAdapter {
         defer { inFlight -= 1 }
         if fetchDelayNanoseconds > 0 { try await Task.sleep(nanoseconds: fetchDelayNanoseconds) }
         if slowEvery > 0, fetchCount % slowEvery == 0 { try await Task.sleep(nanoseconds: slowExtra) }
+        fetchStarts.append(id)
+        if let hang = hangOnce.removeValue(forKey: id) { try await Task.sleep(nanoseconds: hang) }
         if var queue = fetchFailures[id], !queue.isEmpty {
             let error = queue.removeFirst()
             fetchFailures[id] = queue

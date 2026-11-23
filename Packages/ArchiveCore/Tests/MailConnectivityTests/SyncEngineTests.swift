@@ -246,6 +246,63 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(subjects[true], subjects[false], "the same records")
     }
 
+    // MARK: TOR-01 — endgame mode
+
+    func testTOR01_aStuckDownload_isAskedForAgainOnAnIdleSlot_theFirstCompleteCopyIsSaved() async throws {
+        let sink = makeSink()
+        let fake = FakeMailProvider(pageSize: 40)
+        await seed(fake, folders: 1, perFolder: 40)
+        await fake.setFetchDelay(2_000_000)
+        await fake.hangFirstFetch(of: "f0-30", for: 20_000_000_000)        // 20 s: a hung connection
+        try await register(fake, in: sink)
+        let engine = makeEngine(fake, sink)
+        await engine.setPipelineOverride(true)
+        await engine.setHedgeMinimumDelay(0.05)
+        let started = Date()
+        let report = await engine.sync()
+        let seconds = Date().timeIntervalSince(started)
+        XCTAssertEqual(report.outcome, .completed)
+        XCTAssertEqual(report.receipt?.stored, 40)
+        XCTAssertLessThan(seconds, 5, "the stuck download did not hold the run for 20 s")
+        let started2 = await engine.hedgesStarted
+        let won = await engine.hedgesWon
+        XCTAssertGreaterThanOrEqual(started2, 1)
+        XCTAssertEqual(won, 1, "the second request finished first and was saved")
+        let starts = await fake.fetchStarts
+        XCTAssertEqual(starts.filter { $0 == "f0-30" }.count, 2, "asked for twice")
+        let ids = try await capturedIDs(sink, account: fake.accountID)
+        XCTAssertEqual(ids.count, 40); XCTAssertEqual(Set(ids).count, 40, "saved once")
+        try await assertEveryRecordHasItsBytes(sink, "after a hedged download")
+        XCTAssertTrue(stagedFiles(sink).isEmpty, "the cancelled copy left nothing behind")
+    }
+
+    func testTOR01_noSecondRequest_withoutTheFastMode_orUnderASpeedLimit_orWhileOthersWait() async throws {
+        for mode in ["plain", "limited"] {
+            let sink = makeSink(mode)
+            let fake = FakeMailProvider(pageSize: 40)
+            await seed(fake, folders: 1, perFolder: 30)
+            await fake.hangFirstFetch(of: "f0-25", for: 300_000_000)      // 0.3 s
+            try await register(fake, in: sink)
+            let engine = makeEngine(fake, sink)
+            await engine.setHedgeMinimumDelay(0.01)
+            await engine.setPipelineOverride(mode == "limited")
+            if mode == "limited" { await engine.setLimiter(BandwidthLimiter(bytesPerSecond: 1_000_000_000)) }
+            let report = await engine.sync()
+            XCTAssertEqual(report.outcome, .completed)
+            let hedges = await engine.hedgesStarted
+            XCTAssertEqual(hedges, 0, mode)
+        }
+        // The scheduler never gives a second-request slot while someone waits for one.
+        let scheduler = FairDownloadScheduler(totalSlots: 1)
+        let a = UUID(), b = UUID()
+        try await scheduler.acquire(account: a, accountLimit: 1)
+        let ok = await scheduler.tryAcquire(account: b, accountLimit: 1)
+        XCTAssertFalse(ok, "no free slot")
+        await scheduler.release(account: a)
+        let free = await scheduler.tryAcquire(account: b, accountLimit: 1)
+        XCTAssertTrue(free, "an idle slot is used")
+    }
+
     // MARK: TOR-02 — adaptive downloads
 
     func testTOR02_adaptive_growsByOneAfterCleanDownloads_halvesWhenToldToSlowDown() {

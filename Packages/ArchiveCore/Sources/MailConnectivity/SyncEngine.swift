@@ -699,6 +699,102 @@ public actor SyncEngine {
     var pipelined: Bool { pipelineOverride ?? (ConnectedFastMode.isEnabled || Self.pipelineForcedByEnvironment) }
     private var sinkPreparesInParallel = false
 
+    // MARK: TOR-01 — endgame mode
+
+    /// TOR-01 (owner 2026-11-23, torrent-engine techniques: endgame mode). A
+    /// torrent asks for its last slow pieces twice; here a download that takes
+    /// far longer than usual (4 × the median of the last 64, at least
+    /// `hedgeMinimumDelay`) is asked for a second time — only when a download
+    /// slot is free and nobody waits for one, so it never takes anyone's turn.
+    /// The first copy to arrive complete is saved; the other is cancelled and
+    /// its bytes removed. With the fast mode only; never while a speed limit
+    /// is set or a broken download is being continued.
+    var hedgeMinimumDelay: TimeInterval = 2
+    func setHedgeMinimumDelay(_ seconds: TimeInterval) { hedgeMinimumDelay = seconds }
+    private var recentFetchSeconds: [TimeInterval] = []
+    public private(set) var hedgesStarted = 0
+    public private(set) var hedgesWon = 0
+    private func noteHedgeStarted() { hedgesStarted += 1 }
+
+    func hedgeDelay() -> TimeInterval? {
+        guard pipelined, recentFetchSeconds.count >= 16 else { return nil }
+        let sorted = recentFetchSeconds.sorted()
+        return max(hedgeMinimumDelay, 4 * sorted[sorted.count / 2])
+    }
+
+    private func recordFetch(since start: ContinuousClock.Instant) {
+        let d = ContinuousClock.now - start
+        recentFetchSeconds.append(Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
+        if recentFetchSeconds.count > 64 { recentFetchSeconds.removeFirst() }
+    }
+
+    private enum RaceResult: Sendable {
+        case arrived(RawByteSink, FetchedItemMetadata, second: Bool)
+        case failed(Error, second: Bool)
+        case notStarted
+    }
+
+    private func fetchRacing(_ ref: RemoteItemRef, primary: RawByteSink, mayHedge: Bool,
+                             context: ProviderRequestContext) async throws -> (RawByteSink, FetchedItemMetadata) {
+        let start = ContinuousClock.now
+        guard mayHedge, let delay = hedgeDelay() else {
+            let fetched = try await adapter.fetchRaw(ref, into: primary, context: context)
+            recordFetch(since: start)
+            return (primary, fetched)
+        }
+        let (adapter, scheduler, sink, account, limit) = (self.adapter, self.scheduler, self.sink, accountID, downloadLimit())
+        let outcome: Result<(RawByteSink, FetchedItemMetadata), Error> = await withTaskGroup(of: RaceResult.self) { group in
+            group.addTask {
+                do { return .arrived(primary, try await adapter.fetchRaw(ref, into: primary, context: context), second: false) }
+                catch { return .failed(error, second: false) }
+            }
+            group.addTask {
+                do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return .notStarted }
+                guard await scheduler.tryAcquire(account: account, accountLimit: limit) else { return .notStarted }
+                await self.noteHedgeStarted()
+                let second: RawByteSink
+                do { second = RawByteSink(writer: try sink.makeStagingWriter()) } catch {
+                    await scheduler.release(account: account)
+                    return .notStarted
+                }
+                do {
+                    let fetched = try await adapter.fetchRaw(ref, into: second, context: context)
+                    await scheduler.release(account: account)
+                    return .arrived(second, fetched, second: true)
+                } catch {
+                    second.discard()
+                    await scheduler.release(account: account)
+                    return .failed(error, second: true)
+                }
+            }
+            var primaryError: Error?
+            while let result = await group.next() {
+                switch result {
+                case .arrived(let winner, let fetched, let second):
+                    group.cancelAll()
+                    // The other request is cancelled; whatever it received is removed.
+                    while let other = await group.next() {
+                        if case .arrived(let loser, _, _) = other, loser !== winner { loser.discard() }
+                    }
+                    if second { primary.discard(); hedgesWon += 1 }
+                    recordFetch(since: start)
+                    return .success((winner, fetched))
+                case .failed(let error, let second):
+                    // The first request failing ends the race (the engine's retry
+                    // decides what happens next); a failed second request is ignored.
+                    if !second {
+                        primaryError = error
+                        group.cancelAll()
+                    }
+                case .notStarted:
+                    continue
+                }
+            }
+            return .failure(primaryError ?? CancellationError())
+        }
+        return try outcome.get()
+    }
+
     // MARK: TOR-02 — adaptive downloads
 
     /// TOR-02 (owner 2026-11-23, torrent-engine techniques): how many of this
@@ -972,16 +1068,23 @@ public actor SyncEngine {
         if hinted > 0 { try await limiter.pace(hinted) }
         let resumable = adapter.resumesPartialDownloads && partial != nil
         let bytes: RawByteSink
+        var resumedNow = false
         if resumable, let kept = partial?.take() {
             bytes = kept
+            resumedNow = true
             downloadsResumed += 1
             bytesNotDownloadedAgain += kept.bytesWritten
         } else {
             bytes = RawByteSink(writer: try sink.makeStagingWriter())
         }
+        var active = bytes
         do {
-            let fetched = try await adapter.fetchRaw(ref, into: bytes, context: context)
-            let staged = try bytes.finish()
+            // TOR-01: a download far slower than usual gets a second request on an idle slot.
+            let limitedSpeed = await limiter.bytesPerSecond
+            let mayHedge = !resumedNow && limitedSpeed == 0
+            let (winner, fetched) = try await fetchRacing(ref, primary: bytes, mayHedge: mayHedge, context: context)
+            active = winner
+            let staged = try winner.finish()
             if let expected = fetched.expectedByteCount, expected != staged.byteCount {
                 try? FileManager.default.removeItem(at: staged.fileURL)
                 throw MailProviderError.transient("the transfer ended after \(staged.byteCount) of \(expected) bytes")
@@ -995,15 +1098,16 @@ public actor SyncEngine {
             if staged.byteCount > hinted { try await limiter.pace(staged.byteCount - hinted) }
             return outcome
         } catch {
-            largestWriteNeed = max(largestWriteNeed, need, 2 * bytes.bytesWritten)
+            largestWriteNeed = max(largestWriteNeed, need, 2 * active.bytesWritten)
             // DL-07: a large message cut off by the network keeps what arrived,
             // when the file holds exactly the bytes counted (nothing half-written).
             if resumable, case MailProviderError.transient = error, !Task.isCancelled,
-               bytes.bytesWritten >= partialResumeMinimumBytes, bytes.fileMatchesCount {
-                partial?.keep(bytes)
+               active.bytesWritten >= partialResumeMinimumBytes, active.fileMatchesCount {
+                partial?.keep(active)
             } else {
-                bytes.discard()
+                active.discard()
             }
+            if active !== bytes { bytes.discard() }
             throw error
         }
     }
