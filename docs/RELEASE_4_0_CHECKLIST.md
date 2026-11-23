@@ -65,6 +65,13 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-23 (evening): 1003 is ready to archive
+
+Also in 1003: CRASH-02 (7bb16e4) — crash reports are files in the on-device diagnostics folder, shown in Settings ▸
+Crash reports (path, Show in Finder / Share reports), no banner in the window. Everything is pushed to
+`v3-architecture`. Owner: archive "maxmailin Connected" for My Mac and for Any iOS Device, upload 4.0 (1003) from
+Organizer, attach 1003 to both 4.0 versions in App Store Connect, submit.
+
 ## Status 2026-11-23 (afternoon): 1003 also carries TOR-01/02; release tests run
 
 Since the 1003 note below: TOR-02 adaptive downloads (eb33b8d), TOR-01 endgame mode (2d4f9e3); TOR-03 Gmail batch
