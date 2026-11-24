@@ -2,25 +2,113 @@
   "title": "mailin Enterprise (com.ecosanskriti.mailin.enterprise)",
   "description": "Managed settings for mailin Enterprise. Upload in Jamf Pro ▸ Configuration Profiles ▸ Application & Custom Settings ▸ External Applications ▸ Custom Schema, with the preference domain com.ecosanskriti.mailin.enterprise. See ENTERPRISE_DEPLOYMENT.md.",
   "properties": {
-    "orgName": { "title": "Organization name", "type": "string", "description": "Shown in About and on every report and receipt." },
-    "examinerName": { "title": "Examiner name", "type": "string", "description": "The person's name on audit entries and sealed receipts, e.g. $FULLNAME." },
+    "orgName": {
+      "title": "Organization name",
+      "type": "string",
+      "description": "Shown in About and on every report and receipt."
+    },
+    "examinerName": {
+      "title": "Examiner name",
+      "type": "string",
+      "description": "The person's name on audit entries and sealed receipts, e.g. $FULLNAME."
+    },
     "role": {
       "title": "Role",
       "type": "string",
-      "enum": ["viewer", "reviewer", "examiner", "administrator"],
+      "enum": [
+        "viewer",
+        "reviewer",
+        "examiner",
+        "administrator"
+      ],
       "default": "examiner",
       "description": "viewer: read and search. reviewer: + tag, code, annotate. examiner: + import, export, print, legal holds, productions. administrator: + permanent deletion, releasing holds, modules, restore, license. An unknown value is treated as viewer."
     },
-    "allowExport": { "title": "Allow exporting and sharing", "type": "boolean", "default": true },
-    "allowPrint": { "title": "Allow printing", "type": "boolean", "default": true },
-    "requireBiometricLock": { "title": "Require the app lock", "type": "boolean", "default": true },
-    "disableCloudAI": { "title": "Disable cloud AI", "type": "boolean", "default": true },
-    "caseNumberPrefix": { "title": "Case and Bates number prefix", "type": "string" },
-    "licenseKey": { "title": "License key", "type": "string", "description": "The MAILIN1.… key issued for your organization." },
+    "allowExport": {
+      "title": "Allow exporting and sharing",
+      "type": "boolean",
+      "default": true
+    },
+    "allowPrint": {
+      "title": "Allow printing",
+      "type": "boolean",
+      "default": true
+    },
+    "requireBiometricLock": {
+      "title": "Require the app lock",
+      "type": "boolean",
+      "default": true
+    },
+    "disableCloudAI": {
+      "title": "Disable cloud AI",
+      "type": "boolean",
+      "default": true
+    },
+    "caseNumberPrefix": {
+      "title": "Case and Bates number prefix",
+      "type": "string"
+    },
+    "licenseKey": {
+      "title": "License key",
+      "type": "string",
+      "description": "The MAILIN1.… key issued for your organization."
+    },
     "disabledModules": {
       "title": "Pages switched off for everyone",
       "type": "array",
-      "items": { "type": "string", "enum": ["aiInsights", "professional"] }
+      "items": {
+        "type": "string",
+        "enum": [
+          "aiInsights",
+          "professional",
+          "liveMail"
+        ]
+      }
+    },
+    "allowConnectedMail": {
+      "title": "Allow Live Mail",
+      "type": "boolean",
+      "default": true,
+      "description": "false: the Live Mail page and every mail connection are off; nothing connects to a mail server."
+    },
+    "allowedMailProviders": {
+      "title": "Allowed mail providers",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "gmail",
+          "microsoft365",
+          "icloud",
+          "fastmail",
+          "imap"
+        ]
+      },
+      "description": "Leave empty or unset for all. imap = any other IMAP server. An account of another provider gets no network; its saved mail stays."
+    },
+    "allowSendMail": {
+      "title": "Allow sending mail",
+      "type": "boolean",
+      "default": true
+    },
+    "allowServerChanges": {
+      "title": "Allow changing mail on the server",
+      "type": "boolean",
+      "default": true,
+      "description": "false: mailin never moves, flags or deletes mail on the server."
+    },
+    "syncOnlyOnWiFi": {
+      "title": "Automatic sync only on Wi-Fi or a wired network",
+      "type": "boolean"
+    },
+    "syncOnlyWhileCharging": {
+      "title": "Automatic sync only while charging",
+      "type": "boolean"
+    },
+    "maxDownloadMBps": {
+      "title": "Highest average download speed (MB/s)",
+      "type": "number",
+      "description": "The person may choose a lower limit, never a higher one."
     }
   }
 }

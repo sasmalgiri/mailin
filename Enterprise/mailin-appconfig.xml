@@ -19,6 +19,13 @@
     <string keyName="caseNumberPrefix"><defaultValue><value></value></defaultValue></string>
     <string keyName="licenseKey"><defaultValue><value></value></defaultValue></string>
     <stringArray keyName="disabledModules"/>
+    <boolean keyName="allowConnectedMail"><defaultValue><value>true</value></defaultValue></boolean>
+    <stringArray keyName="allowedMailProviders"/>
+    <boolean keyName="allowSendMail"><defaultValue><value>true</value></defaultValue></boolean>
+    <boolean keyName="allowServerChanges"><defaultValue><value>true</value></defaultValue></boolean>
+    <boolean keyName="syncOnlyOnWiFi"><defaultValue><value>false</value></defaultValue></boolean>
+    <boolean keyName="syncOnlyWhileCharging"><defaultValue><value>false</value></defaultValue></boolean>
+    <real keyName="maxDownloadMBps"/>
   </dict>
   <presentation defaultLocale="en-US">
     <field keyName="orgName" type="input">
@@ -63,7 +70,38 @@
       <options>
         <option value="aiInsights"><language value="en-US">AI Insights</language></option>
         <option value="professional"><language value="en-US">Professional Workflows</language></option>
+        <option value="liveMail"><language value="en-US">Live Mail</language></option>
       </options>
+    </field>
+    <field keyName="allowConnectedMail" type="checkbox">
+      <label><language value="en-US">Allow Live Mail</language></label>
+      <description><language value="en-US">Off: the Live Mail page and every mail connection are off.</language></description>
+    </field>
+    <field keyName="allowedMailProviders" type="multiselect">
+      <label><language value="en-US">Allowed mail providers (none selected = all)</language></label>
+      <options>
+        <option value="gmail"><language value="en-US">Gmail</language></option>
+        <option value="microsoft365"><language value="en-US">Microsoft 365 / Outlook</language></option>
+        <option value="icloud"><language value="en-US">iCloud Mail</language></option>
+        <option value="fastmail"><language value="en-US">Fastmail</language></option>
+        <option value="imap"><language value="en-US">Any other IMAP server</language></option>
+      </options>
+    </field>
+    <field keyName="allowSendMail" type="checkbox">
+      <label><language value="en-US">Allow sending mail</language></label>
+    </field>
+    <field keyName="allowServerChanges" type="checkbox">
+      <label><language value="en-US">Allow changing mail on the server</language></label>
+    </field>
+    <field keyName="syncOnlyOnWiFi" type="checkbox">
+      <label><language value="en-US">Automatic sync only on Wi-Fi or a wired network</language></label>
+    </field>
+    <field keyName="syncOnlyWhileCharging" type="checkbox">
+      <label><language value="en-US">Automatic sync only while charging</language></label>
+    </field>
+    <field keyName="maxDownloadMBps" type="input">
+      <label><language value="en-US">Highest average download speed (MB/s)</language></label>
+      <description><language value="en-US">Empty: no organisation limit. The person may choose a lower one.</language></description>
     </field>
   </presentation>
 </managedAppConfiguration>

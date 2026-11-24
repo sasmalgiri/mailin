@@ -26,6 +26,12 @@
             <key>caseNumberPrefix</key><string>ACME</string>
             <key>licenseKey</key><string>MAILIN1.paste-your-key-here</string>
             <key>disabledModules</key><array/>
+            <key>allowConnectedMail</key><true/>
+            <key>allowedMailProviders</key><array><string>microsoft365</string></array>
+            <key>allowSendMail</key><true/>
+            <key>allowServerChanges</key><false/>
+            <key>syncOnlyOnWiFi</key><true/>
+            <key>maxDownloadMBps</key><real>10</real>
         </dict>
     </array>
     <key>PayloadDisplayName</key><string>mailin Enterprise</string>
