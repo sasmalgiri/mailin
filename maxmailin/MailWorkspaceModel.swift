@@ -224,7 +224,10 @@ enum MailModeText {
     /// Why `mode` cannot be switched on for this account in this version (nil = it can).
     /// Gmail over IMAP with an app password (4.0): changing server mail is not supported —
     /// a Gmail message sits in several label folders, so a folder-level change is unsafe.
-    static func unavailableReason(_ mode: MailAccount.Mode, account: MailAccount) -> String? {
+    static func unavailableReason(_ mode: MailAccount.Mode, account: MailAccount,
+                                  managed: ManagedLiveMailPolicy = .current) -> String? {
+        // ENT4-02: the organisation's controls come first.
+        if let refused = managed.refusal(mode, account: account) { return refused }
         guard mode == .serverActions, account.provider == .imap, ConnectedMailErrorText.isGmailHost(account.host) else { return nil }
         return String(localized: "Not available for Gmail with an app password in this version. Saving and sending mail work.")
     }
@@ -1091,7 +1094,11 @@ final class MailWorkspaceModel {
     }
 
     /// V4-16: the providers Add account lists (one Gmail entry, by the build's mode).
-    var offeredProviders: [MailProviderChoice] { MailProviderChoice.offered(info: backend.providerInfo) }
+    /// ENT4-02: only the providers the organisation allows.
+    var offeredProviders: [MailProviderChoice] {
+        let managed = ManagedLiveMailPolicy.current
+        return MailProviderChoice.offered(info: backend.providerInfo).filter { managed.allows($0) }
+    }
 
     func providerReadiness(_ choice: MailProviderChoice) -> MailProviderChoice.Readiness {
         guard availability == .ready else { return .unavailable(availability.title) }

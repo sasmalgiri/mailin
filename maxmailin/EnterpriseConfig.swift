@@ -21,6 +21,9 @@ private let enterpriseLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "m
 //   licenseKey         string  — pilot enterprise licensing (E2 interim)
 //   disabledModules    [string]— hard-off page ids: aiInsights, professional,
 //                               liveMail (v3.0 §3.3; user cannot re-enable)
+//   allowConnectedMail, allowedMailProviders, allowSendMail, allowServerChanges,
+//   syncOnlyOnWiFi, syncOnlyWhileCharging, maxDownloadMBps — Live Mail controls
+//                               (ENT4-02, ManagedLiveMailPolicy.swift)
 
 enum ManagedConfig {
 
@@ -49,6 +52,9 @@ enum ManagedConfig {
         }
         return config
     }
+
+    /// The merged managed dictionary (ManagedLiveMailPolicy reads its keys from it).
+    static var configuration: [String: Any] { dict }
 
     /// True when any MDM configuration is present.
     static var isManaged: Bool { !dict.isEmpty }
@@ -100,11 +106,15 @@ enum ManagedConfig {
     // MARK: Validation (V-1)
 
     /// Every key this app understands, with its expected type.
-    enum KeyType: String { case string, bool, stringArray = "array of strings" }
+    enum KeyType: String { case string, bool, stringArray = "array of strings", number }
     static let schema: [String: KeyType] = [
         "orgName": .string, "examinerName": .string, "disableCloudAI": .bool,
         "requireBiometricLock": .bool, "caseNumberPrefix": .string, "licenseKey": .string,
         "disabledModules": .stringArray, "role": .string, "allowExport": .bool, "allowPrint": .bool,
+        // ENT4-02: Live Mail.
+        "allowConnectedMail": .bool, "allowedMailProviders": .stringArray, "allowSendMail": .bool,
+        "allowServerChanges": .bool, "syncOnlyOnWiFi": .bool, "syncOnlyWhileCharging": .bool,
+        "maxDownloadMBps": .number,
     ]
 
     /// Problems in the pushed configuration — wrong types, unknown keys,
@@ -123,6 +133,7 @@ enum ManagedConfig {
             case .string: ok = value is String
             case .bool: ok = value is Bool
             case .stringArray: ok = value is [String]
+            case .number: ok = ManagedLiveMailPolicy.number(value) != nil
             }
             if !ok { issues.append(String(localized: "“\(key)” should be a \(expected.rawValue) — ignored.")) }
         }
@@ -133,6 +144,14 @@ enum ManagedConfig {
             for m in modules where AppModule(rawValue: m) == nil {
                 issues.append(String(localized: "“disabledModules” lists “\(m)”, which is not a module — ignored."))
             }
+        }
+        if let providers = config["allowedMailProviders"] as? [String] {
+            for p in providers where ManagedMailProvider(managedName: p) == nil {
+                issues.append(String(localized: "“allowedMailProviders” lists “\(p)”, which is not gmail, microsoft365, icloud, fastmail or imap — ignored."))
+            }
+        }
+        if let mb = ManagedLiveMailPolicy.number(config["maxDownloadMBps"]), mb <= 0 {
+            issues.append(String(localized: "“maxDownloadMBps” must be more than 0 — no organisation limit is applied."))
         }
         return issues
     }
@@ -155,6 +174,7 @@ enum ManagedConfig {
             "allowExport": allowExport,
             "allowPrint": allowPrint,
             "configIssues": validationIssues,
+            "liveMail": liveMailFeedback(ManagedLiveMailPolicy.current),
             "reportedAt": ISO8601DateFormatter().string(from: now),
         ]
         #if ENTERPRISE_EDITION
@@ -171,6 +191,20 @@ enum ManagedConfig {
             case .expired(let p): out["licenseState"] = "expired"; out["licenseID"] = p.id; out["licenseOrg"] = p.org; out["licenseExpires"] = p.expires ?? ""
             }
         }
+        return out
+    }
+
+    /// ENT4-02: the Live Mail controls in force, for the MDM console.
+    static func liveMailFeedback(_ p: ManagedLiveMailPolicy) -> [String: Any] {
+        var out: [String: Any] = [
+            "allowConnectedMail": p.allowConnectedMail,
+            "allowSendMail": p.allowSendMail,
+            "allowServerChanges": p.allowServerChanges,
+            "allowedMailProviders": p.allowedProviders.map { $0.map(\.rawValue).sorted() } ?? ["all"],
+        ]
+        if let v = p.syncOnlyOnWiFi { out["syncOnlyOnWiFi"] = v }
+        if let v = p.syncOnlyWhileCharging { out["syncOnlyWhileCharging"] = v }
+        if let b = p.maxDownloadBytesPerSecond { out["maxDownloadMBps"] = Double(b) / 1_000_000 }
         return out
     }
 

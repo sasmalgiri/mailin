@@ -64,9 +64,11 @@ struct ConnectedSyncSchedule: Codable, Equatable {
         speedLimit = try c.decodeIfPresent(SpeedLimit.self, forKey: .speedLimit) ?? .none
     }
 
-    /// DL-06: hands the saved speed limit to the downloads.
-    static func applySpeedLimit(_ schedule: ConnectedSyncSchedule = .load()) async {
-        await BandwidthLimiter.shared.setLimit(bytesPerSecond: schedule.speedLimit.bytesPerSecond)
+    /// DL-06: hands the saved speed limit to the downloads — ENT4-02: never
+    /// above the organisation's `maxDownloadMBps`.
+    static func applySpeedLimit(_ schedule: ConnectedSyncSchedule = .load(),
+                                managed: ManagedLiveMailPolicy = .current) async {
+        await BandwidthLimiter.shared.setLimit(bytesPerSecond: managed.speedLimit(personal: schedule.speedLimit.bytesPerSecond))
     }
 
     /// The night window for `nightOnly`: 22:00 to 07:00, local time.
@@ -172,7 +174,8 @@ final class ConnectedSyncScheduler {
         startMonitoring()
         // The first network reading arrives within moments of starting the monitor.
         for _ in 0..<20 where path == nil { try? await Task.sleep(nanoseconds: 50_000_000) }
-        let schedule = ConnectedSyncSchedule.load()
+        // ENT4-02: the organisation's Wi-Fi / charging locks win over the person's choice.
+        let schedule = ManagedLiveMailPolicy.current.applied(to: ConnectedSyncSchedule.load())
         switch ConnectedSyncGate.decide(schedule, conditions(), lastAutomatic: lastAutomatic, forLaunch: forLaunch) {
         case .run:
             lastWaitReason = nil

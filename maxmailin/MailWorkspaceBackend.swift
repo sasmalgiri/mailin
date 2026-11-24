@@ -277,6 +277,8 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     func addIMAP(_ form: MailIMAPForm) async throws -> UUID {
         if let problem = form.problem { throw MailWorkspaceError(problem) }
         var account = MailOnboarding.newAccount(form)
+        // ENT4-02: a provider the organisation does not allow is never added.
+        guard ManagedLiveMailPolicy.current.allows(account) else { throw MailWorkspaceError(ManagedLiveMailPolicy.providerRefused) }
         let smtp = Self.smtpSettings(form)
         // Adding the same mailbox again reconnects its earlier entry (its saved
         // mail is not downloaded again); a connected one is refused.
@@ -342,6 +344,7 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
     }
 
     func signIn(_ choice: MailProviderChoice, address: String, existing: UUID?, extraScopes: [String]) async throws -> UUID {
+        guard ManagedLiveMailPolicy.current.allows(choice) else { throw MailWorkspaceError(ManagedLiveMailPolicy.providerRefused) }
         guard case .ready = choice.readiness(info: providerInfo) else { throw MailWorkspaceError(MailProviderChoice.notConfiguredReason(choice)) }
         guard let transports else { throw MailBackendUnavailable() }
         let typed = address.trimmingCharacters(in: .whitespaces)
@@ -456,6 +459,9 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
 
     func setMode(_ mode: MailAccount.Mode, enabled: Bool, account id: UUID) async throws {
         var account = try await runtime.registry.account(id)
+        if enabled, let refused = ManagedLiveMailPolicy.current.refusal(mode, account: account) {
+            throw MailWorkspaceError(refused)
+        }
         if enabled { account.enabledModes.insert(mode) } else { account.enabledModes.remove(mode) }
         try await runtime.registry.save(account)
         try await runtime.reloadAccounts()
@@ -543,6 +549,7 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
 
     func changeOnServer(_ request: RemoteChangeRequest, row: ConnectedMailboxRow) async throws -> RemoteOperation {
         let account = try await runtime.registry.account(row.accountID)
+        if let refused = ManagedLiveMailPolicy.current.refusal(.serverActions, account: account) { throw MailWorkspaceError(refused) }
         let policy = runtime.policy
         let permission = lifecycle.serverActionPermission(Self.permission(policy: policy, purpose: .changeServerMail))
         let trash = await trashMailbox(account.id)
@@ -618,6 +625,8 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
 
     func queue(_ draft: Draft, undoDelay: TimeInterval) async throws -> OutboxOperation {
         let account = try await runtime.registry.account(draft.accountID)
+        // ENT4-02: refused before it reaches the outbox (the draft is kept).
+        if let refused = ManagedLiveMailPolicy.current.refusal(.send, account: account) { throw MailWorkspaceError(refused) }
         let identities = extras.identities(for: account)
         let composed = try await draftStore.compose(draft.id, account: account, identities: identities, date: Date())
         // Microsoft takes at most 4 MB per message once encoded: refused here,
@@ -697,6 +706,7 @@ final class ConnectedMailBackend: MailWorkspaceBackend {
 
     func runCleanup(_ plan: CleanupPlan, confirmation: CleanupConfirmation) async throws -> CleanupReceipt {
         let account = try await runtime.registry.account(plan.accountID)
+        if let refused = ManagedLiveMailPolicy.current.refusal(.serverActions, account: account) { throw MailWorkspaceError(refused) }
         let policy = runtime.policy
         let permission = lifecycle.serverActionPermission(Self.permission(policy: policy, purpose: .changeServerMail))
         let trash = await trashMailbox(account.id)

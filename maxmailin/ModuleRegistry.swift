@@ -378,6 +378,8 @@ final class ModuleRegistry {
             applyWiring(forPage: module)
             moduleLog.info("policy allows \(module.rawValue, privacy: .public) again")
         }
+        // ENT4-02: Live Mail re-reads its controls (account modes, speed limit).
+        NotificationCenter.default.post(name: ManagedConfig.didChange, object: nil)
     }
 
     /// Pages absent from this build. Live Mail is compiled in only under
@@ -429,6 +431,11 @@ final class ModuleRegistry {
     private func orgDisabledReason(_ module: AppModule) -> String? {
         guard module.isOptional else { return nil }
         if ManagedConfig.disabledModules.contains(module.managedConfigName) {
+            return "disabled by your organization"
+        }
+        // ENT4-02: allowConnectedMail = false switches the Live Mail page and
+        // with it every mail connection off (the connectedMail capability's page).
+        if module == .liveMail, !ManagedLiveMailPolicy.current.allowConnectedMail {
             return "disabled by your organization"
         }
         // A managed "no cloud AI" policy does not disable on-device AI, so it

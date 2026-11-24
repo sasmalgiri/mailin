@@ -285,9 +285,16 @@ final class ConnectedMailRuntime {
     func reloadAccounts() async throws {
         let accounts = try await registry.accounts()
         let permission = Self.permission(policy: policy)
+        let managed = managedPolicy()
         var seen = Set<UUID>()
         for account in accounts {
             seen.insert(account.id)
+            // ENT4-02: an account of a provider the organisation does not
+            // allow gets no network at all; its saved mail stays.
+            if account.connectionState == .connected, !managed.allows(account) {
+                disable(account.id, reason: ManagedLiveMailPolicy.providerRefused)
+                continue
+            }
             // V4-13: an account is granted in the policy when it is signed in
             // and allowed at least one mode (Send or Change server mail work
             // without Preserve mail); it gets a capture engine only when
@@ -330,7 +337,8 @@ final class ConnectedMailRuntime {
                     adapter = built
                     rebuilt = true
                 }
-                var modes = Self.networkModes(account.enabledModes)
+                // ENT4-02: Send and Change server mail only where the organisation allows them.
+                var modes = managed.networkModes(Self.networkModes(account.enabledModes))
                 let capturing = account.enabledModes.contains(.capture) && !paused.contains(account.id)
                 if !capturing { modes.remove(.preserveMail) }
                 policy.setAccount(MailAccountNetworkPolicy(
@@ -868,6 +876,7 @@ final class ConnectedMailRuntime {
             runtime.rules = CaptureRuleEngine.production(store: deps.store)
             shared = runtime
             observeVolumes()
+            observeManagedPolicy()
             Task { @MainActor in
                 do {
                     try await runtime.start()
@@ -912,6 +921,24 @@ final class ConnectedMailRuntime {
     #endif
 
     /// A mounted volume may be the archive's drive coming back.
+    /// ENT4-02: the organisation's Live Mail controls (tests set their own).
+    var managedPolicy: @Sendable () -> ManagedLiveMailPolicy = { ManagedLiveMailPolicy.current }
+
+    /// ENT4-02: a changed managed configuration re-grants every account and
+    /// re-applies the speed limit without a relaunch.
+    private static func observeManagedPolicy() {
+        guard managedObserver == nil else { return }
+        managedObserver = NotificationCenter.default.addObserver(
+            forName: ManagedConfig.didChange, object: nil, queue: .main) { _ in
+            Task { @MainActor in
+                guard let runtime = ConnectedMailRuntime.shared else { return }
+                try? await runtime.reloadAccounts()
+                await ConnectedSyncSchedule.applySpeedLimit()
+            }
+        }
+    }
+    private static var managedObserver: NSObjectProtocol?
+
     private static func observeVolumes() {
         #if os(macOS)
         guard volumeObserver == nil else { return }

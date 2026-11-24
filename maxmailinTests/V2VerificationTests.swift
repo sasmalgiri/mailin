@@ -14435,3 +14435,206 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(composer.contains("confirmationDialog(String(localized: \"Delete \\(emptyDrafts.count) empty drafts?\")"))
     }
 }
+
+/// ENT4-02 (owner 2026-11-24): an organisation controls Live Mail through its
+/// MDM — the page, the providers, sending, server changes, the automatic-sync
+/// conditions and the download speed. Enforced where each account's network
+/// modes are granted, at every entry point, and shown in the interface.
+@MainActor
+final class EnterpriseLiveMailControlsTests: XCTestCase {
+
+    private struct Env {
+        let root: URL
+        let runtime: ConnectedMailRuntime
+        let policy: MailNetworkPolicy
+        let credentials: ConnectedFiveJobsCredentials
+    }
+
+    private func makeEnv(adapters: @escaping ConnectedAdapterFactory) -> Env {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ENT4-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let store = SQLiteEmailStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let fts = FTSSearchIndex(shardsDirectory: root.appendingPathComponent("fts", isDirectory: true))
+        let policy = MailNetworkPolicy(transportsCompiled: true)
+        policy.setMailEnabled(true)
+        let credentials = ConnectedFiveJobsCredentials()
+        let deps = ConnectedMailRuntime.Dependencies(store: store, fts: fts, policy: policy, credentials: credentials, tokens: nil,
+                                                     adapters: adapters, storage: StorageProbe(reserveBytes: 0))
+        return Env(root: root, runtime: ConnectedMailRuntime(dependencies: deps), policy: policy, credentials: credentials)
+    }
+
+    private func addGmail(_ env: Env, id: UUID, modes: Set<MailAccount.Mode>) async throws {
+        try await env.runtime.registry.add(MailAccount(id: id, provider: .gmail, issuer: GmailOAuth.issuer, displayIdentity: "asha@example.com",
+                                                       grantedScopes: [GmailOAuth.readOnlyScope], enabledModes: modes),
+                                           secret: Data("fixture-secret".utf8), kind: .oauthTokenSet)
+    }
+
+    private func withManaged(_ config: [String: Any], _ body: () throws -> Void) rethrows {
+        let defaults = UserDefaults.standard
+        let original = defaults.dictionary(forKey: ManagedConfig.managedDefaultsKey)
+        defer {
+            if let original { defaults.set(original, forKey: ManagedConfig.managedDefaultsKey) }
+            else { defaults.removeObject(forKey: ManagedConfig.managedDefaultsKey) }
+        }
+        defaults.set(config, forKey: ManagedConfig.managedDefaultsKey)
+        try body()
+    }
+
+    // MARK: Reading the keys
+
+    func testENT402NoKeysMeansThePublicBehaviour() {
+        let p = ManagedLiveMailPolicy(config: [:])
+        XCTAssertFalse(p.isManaged)
+        XCTAssertTrue(p.allowConnectedMail)
+        XCTAssertTrue(ManagedMailProvider.allCases.allSatisfy { p.allows($0) })
+        XCTAssertTrue(p.allows(.send)); XCTAssertTrue(p.allows(.serverActions))
+        XCTAssertEqual(p.networkModes([.preserveMail, .sendMail, .changeServerMail]), [.preserveMail, .sendMail, .changeServerMail])
+        XCTAssertEqual(p.speedLimit(personal: 5_000_000), 5_000_000)
+        var s = ConnectedSyncSchedule(); s.wifiOnly = true
+        XCTAssertEqual(p.applied(to: s), s)
+    }
+
+    func testENT402KeysAreReadWithTheirAliasesAndTypes() {
+        let p = ManagedLiveMailPolicy(config: [
+            "allowConnectedMail": true, "allowedMailProviders": ["Outlook", "imap", "nonsense"],
+            "allowSendMail": false, "allowServerChanges": false,
+            "syncOnlyOnWiFi": true, "syncOnlyWhileCharging": false, "maxDownloadMBps": 2.5,
+        ])
+        XCTAssertTrue(p.isManaged)
+        XCTAssertEqual(p.allowedProviders, [.microsoft365, .imap], "outlook is an alias; an unknown name allows nothing")
+        XCTAssertTrue(p.allows(.outlook)); XCTAssertTrue(p.allows(.otherIMAP))
+        XCTAssertFalse(p.allows(MailProviderChoice.gmail)); XCTAssertFalse(p.allows(.gmailAppPassword)); XCTAssertFalse(p.allows(.iCloud))
+        XCTAssertFalse(p.allows(.send)); XCTAssertFalse(p.allows(.serverActions)); XCTAssertTrue(p.allows(.capture))
+        XCTAssertEqual(p.networkModes([.preserveMail, .sendMail, .changeServerMail]), [.preserveMail])
+        XCTAssertEqual(p.maxDownloadBytesPerSecond, 2_500_000)
+        XCTAssertEqual(p.speedLimit(personal: 0), 2_500_000, "no personal limit: the organisation's")
+        XCTAssertEqual(p.speedLimit(personal: 1_000_000), 1_000_000, "a lower personal limit stays")
+        XCTAssertEqual(p.speedLimit(personal: 10_000_000), 2_500_000, "never above the organisation's")
+        var s = ConnectedSyncSchedule(); s.wifiOnly = false; s.whileChargingOnly = true; s.nightOnly = true
+        let applied = p.applied(to: s)
+        XCTAssertTrue(applied.wifiOnly); XCTAssertFalse(applied.whileChargingOnly); XCTAssertTrue(applied.nightOnly)
+        // A Bool is not a number; 0 is no limit; an integer works.
+        XCTAssertNil(ManagedLiveMailPolicy(config: ["maxDownloadMBps": true]).maxDownloadBytesPerSecond)
+        XCTAssertNil(ManagedLiveMailPolicy(config: ["maxDownloadMBps": 0]).maxDownloadBytesPerSecond)
+        XCTAssertEqual(ManagedLiveMailPolicy(config: ["maxDownloadMBps": 3]).maxDownloadBytesPerSecond, 3_000_000)
+        XCTAssertEqual(ManagedLiveMailPolicy(config: ["allowSendMail": "no"]).allowSendMail, true, "a wrong type is ignored")
+    }
+
+    func testENT402AccountsAreSortedIntoProviderFamilies() {
+        func imap(_ host: String) -> MailAccount { MailAccount(provider: .imap, host: host, displayIdentity: "a@example.com") }
+        XCTAssertEqual(ManagedMailProvider(MailAccount(provider: .gmail, displayIdentity: "a@example.com")), .gmail)
+        XCTAssertEqual(ManagedMailProvider(MailAccount(provider: .microsoftGraph, displayIdentity: "a@example.com")), .microsoft365)
+        XCTAssertEqual(ManagedMailProvider(imap("imap.gmail.com")), .gmail, "Gmail with an app password is still Gmail")
+        XCTAssertEqual(ManagedMailProvider(imap("imap.mail.me.com")), .icloud)
+        XCTAssertEqual(ManagedMailProvider(imap("IMAP.FASTMAIL.COM")), .fastmail)
+        XCTAssertEqual(ManagedMailProvider(imap("mail.example.org")), .imap)
+    }
+
+    func testENT402ValidationNamesEveryProblem() {
+        let issues = ManagedConfig.validationIssues(of: [
+            "allowSendMail": "no", "allowedMailProviders": ["gmail", "yahoo"], "maxDownloadMBps": 0, "syncOnlyOnWiFi": true,
+        ])
+        XCTAssertEqual(issues.count, 3, "\(issues)")
+        XCTAssertTrue(issues.contains { $0.contains("allowSendMail") })
+        XCTAssertTrue(issues.contains { $0.contains("yahoo") })
+        XCTAssertTrue(issues.contains { $0.contains("maxDownloadMBps") })
+        XCTAssertTrue(ManagedConfig.validationIssues(of: ["maxDownloadMBps": "fast"]).contains { $0.contains("maxDownloadMBps") })
+        XCTAssertTrue(ManagedConfig.validationIssues(of: ["maxDownloadMBps": 5, "allowConnectedMail": false,
+                                                          "allowServerChanges": true, "syncOnlyWhileCharging": true]).isEmpty)
+    }
+
+    func testENT402FeedbackReportsTheControlsInForce() {
+        let fb = ManagedConfig.liveMailFeedback(ManagedLiveMailPolicy(config: [
+            "allowSendMail": false, "allowedMailProviders": ["microsoft365"], "maxDownloadMBps": 4,
+        ]))
+        XCTAssertEqual(fb["allowSendMail"] as? Bool, false)
+        XCTAssertEqual(fb["allowConnectedMail"] as? Bool, true)
+        XCTAssertEqual(fb["allowedMailProviders"] as? [String], ["microsoft365"])
+        XCTAssertEqual(fb["maxDownloadMBps"] as? Double, 4)
+        XCTAssertEqual(ManagedConfig.liveMailFeedback(ManagedLiveMailPolicy())["allowedMailProviders"] as? [String], ["all"])
+        XCTAssertNotNil(ManagedConfig.feedback(license: nil)["liveMail"] as? [String: Any])
+    }
+
+    // MARK: Enforcement
+
+    func testENT402AllowConnectedMailFalseSwitchesTheLiveMailPageOff() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("modules-\(UUID().uuidString).json")
+        let modules = ModuleRegistry(store: ModuleStateStore(url: url), excludedByBuild: [], trapsOnMisuse: false)
+        try modules.enable(.liveMail)
+        XCTAssertTrue(modules.isEnabled(.liveMail))
+        try withManaged(["allowConnectedMail": false]) {
+            modules.reloadPolicy()
+            XCTAssertEqual(modules.activation(.liveMail), .unavailable(reason: "disabled by your organization"))
+            XCTAssertFalse(modules.isEnabled(.liveMail))
+            XCTAssertFalse(modules.isOn(.connectedMail), "no mail connection without the page")
+            XCTAssertThrowsError(try modules.enable(.liveMail))
+        }
+        modules.reloadPolicy()
+        XCTAssertTrue(modules.isEnabled(.liveMail), "removing the key gives the page back")
+    }
+
+    func testENT402RuntimeGrantsOnlyTheModesTheOrganisationAllows() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        let env = makeEnv(adapters: { _ in provider })
+        let id = provider.accountID
+        try await addGmail(env, id: id, modes: [.capture, .send, .serverActions])
+        env.runtime.managedPolicy = { ManagedLiveMailPolicy(config: ["allowSendMail": false, "allowServerChanges": false]) }
+        try await env.runtime.reloadAccounts()
+        let granted = try XCTUnwrap(env.policy.account(id))
+        XCTAssertTrue(granted.isEnabled)
+        XCTAssertEqual(granted.modes, [.preserveMail], "Send and Change server mail are never granted")
+
+        // Without the keys, the same account gets every mode it allowed.
+        env.runtime.managedPolicy = { ManagedLiveMailPolicy() }
+        try await env.runtime.reloadAccounts()
+        XCTAssertEqual(env.policy.account(id)?.modes, [.preserveMail, .sendMail, .changeServerMail])
+        env.runtime.stop()
+    }
+
+    func testENT402RuntimeCutsOffAProviderTheOrganisationDoesNotAllow() async throws {
+        let provider = ConnectedFiveJobsProvider(accountID: UUID())
+        await provider.addFolder("INBOX", path: "Inbox")
+        let env = makeEnv(adapters: { _ in provider })
+        let id = provider.accountID
+        try await addGmail(env, id: id, modes: [.capture])
+        env.runtime.managedPolicy = { ManagedLiveMailPolicy(config: ["allowedMailProviders": ["microsoft365"]]) }
+        try await env.runtime.reloadAccounts()
+        XCTAssertEqual(env.policy.account(id)?.isEnabled, false, "a Gmail account gets no network")
+        XCTAssertEqual(env.runtime.unavailable[id], ManagedLiveMailPolicy.providerRefused)
+        env.runtime.stop()
+    }
+
+    func testENT402EntryPointsAndTextRefuseWhatTheOrganisationForbids() throws {
+        let gmail = MailAccount(provider: .gmail, displayIdentity: "asha@example.com")
+        let outlook = MailAccount(provider: .microsoftGraph, displayIdentity: "asha@contoso.com")
+        let p = ManagedLiveMailPolicy(config: ["allowSendMail": false, "allowedMailProviders": ["microsoft365"]])
+        XCTAssertEqual(MailModeText.unavailableReason(.send, account: outlook, managed: p), ManagedLiveMailPolicy.modeRefused(.send))
+        XCTAssertNil(MailModeText.unavailableReason(.serverActions, account: outlook, managed: p))
+        XCTAssertNil(MailModeText.unavailableReason(.capture, account: outlook, managed: p))
+        XCTAssertEqual(MailModeText.unavailableReason(.capture, account: gmail, managed: p), ManagedLiveMailPolicy.providerRefused)
+        XCTAssertNil(MailModeText.unavailableReason(.send, account: gmail, managed: ManagedLiveMailPolicy()))
+        // Add account lists only the allowed providers.
+        try withManaged(["allowedMailProviders": ["microsoft365", "icloud"]]) {
+            let offered = MailProviderChoice.offered(info: [:]).filter { ManagedLiveMailPolicy.current.allows($0) }
+            XCTAssertEqual(offered, [.outlook, .iCloud])
+        }
+        // The backend's refusals are in the code paths that send, change or add.
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("maxmailin/MailWorkspaceBackend.swift"), encoding: .utf8)
+        XCTAssertEqual(source.components(separatedBy: "ManagedLiveMailPolicy.current.refusal(").count - 1, 4,
+                       "setMode, changeOnServer, runCleanup and queue ask the organisation")
+        XCTAssertEqual(source.components(separatedBy: "ManagedLiveMailPolicy.current.allows(").count - 1, 2,
+                       "addIMAP and signIn ask the organisation")
+    }
+
+    func testENT402SpeedLimitIsAppliedAtTheOrganisationsMaximum() async {
+        var s = ConnectedSyncSchedule(); s.speedLimit = .twentyFiveMB
+        await ConnectedSyncSchedule.applySpeedLimit(s, managed: ManagedLiveMailPolicy(config: ["maxDownloadMBps": 2]))
+        let limited = await BandwidthLimiter.shared.bytesPerSecond
+        XCTAssertEqual(limited, 2_000_000)
+        await ConnectedSyncSchedule.applySpeedLimit(ConnectedSyncSchedule(), managed: ManagedLiveMailPolicy())
+        let none = await BandwidthLimiter.shared.bytesPerSecond
+        XCTAssertEqual(none, 0)
+    }
+}

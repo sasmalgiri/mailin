@@ -218,6 +218,8 @@ struct MailAccountsList: View {
 /// DL-05: when Live Mail saves new mail by itself.
 struct MailAutomaticSyncSection: View {
     @State private var schedule = ConnectedSyncSchedule.load()
+    /// ENT4-02: the organisation's locks (read when the page appears).
+    @State private var managed = ManagedLiveMailPolicy.current
 
     var body: some View {
         Section {
@@ -225,10 +227,18 @@ struct MailAutomaticSyncSection: View {
                 ForEach(ConnectedSyncSchedule.Interval.allCases) { Text($0.title).tag($0) }
             }
             .accessibilityIdentifier("mail.schedule.interval")
-            Toggle(String(localized: "Only on Wi-Fi or a wired network"), isOn: $schedule.wifiOnly)
-                .accessibilityIdentifier("mail.schedule.wifiOnly")
-            Toggle(String(localized: "Only while charging"), isOn: $schedule.whileChargingOnly)
-                .accessibilityIdentifier("mail.schedule.charging")
+            if let locked = managed.syncOnlyOnWiFi {
+                lockedToggle(String(localized: "Only on Wi-Fi or a wired network"), value: locked, id: "mail.schedule.wifiOnly")
+            } else {
+                Toggle(String(localized: "Only on Wi-Fi or a wired network"), isOn: $schedule.wifiOnly)
+                    .accessibilityIdentifier("mail.schedule.wifiOnly")
+            }
+            if let locked = managed.syncOnlyWhileCharging {
+                lockedToggle(String(localized: "Only while charging"), value: locked, id: "mail.schedule.charging")
+            } else {
+                Toggle(String(localized: "Only while charging"), isOn: $schedule.whileChargingOnly)
+                    .accessibilityIdentifier("mail.schedule.charging")
+            }
             Toggle(String(localized: "Only at night (10 pm – 7 am)"), isOn: $schedule.nightOnly)
                 .accessibilityIdentifier("mail.schedule.night")
             Picker(String(localized: "Download speed"), selection: $schedule.speedLimit) {
@@ -236,6 +246,11 @@ struct MailAutomaticSyncSection: View {
             }
             .accessibilityIdentifier("mail.schedule.speedLimit")
             .accessibilityHint(Text("Keeps your internet connection usable during a large sync"))
+            if let org = managed.maxDownloadBytesPerSecond {
+                Text(Self.organisationLimitText(org))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("mail.schedule.orgSpeedLimit")
+            }
             if let reason = ConnectedSyncScheduler.shared.lastWaitReason, schedule.interval != .off {
                 Text(reason).font(.caption).foregroundStyle(.secondary)
             }
@@ -248,6 +263,25 @@ struct MailAutomaticSyncSection: View {
             new.save()
             if old.speedLimit != new.speedLimit { Task { await ConnectedSyncSchedule.applySpeedLimit(new) } }
         }
+        .task {
+            for await _ in NotificationCenter.default.notifications(named: ManagedConfig.didChange) {
+                managed = ManagedLiveMailPolicy.current
+            }
+        }
+    }
+
+    /// A condition the organisation fixed: shown with its value, not changeable.
+    private func lockedToggle(_ title: String, value: Bool, id: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle(title, isOn: .constant(value)).disabled(true)
+            Text(ManagedLiveMailPolicy.setByOrganisation).font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier(id)
+    }
+
+    static func organisationLimitText(_ bytesPerSecond: Int64) -> String {
+        let speed = ByteCountFormatter.string(fromByteCount: bytesPerSecond, countStyle: .decimal)
+        return String(localized: "Set by your organisation: at most \(speed)/s on average.")
     }
 }
 
