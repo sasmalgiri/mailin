@@ -110,7 +110,7 @@
     </section>
 
     <div class="content">
-        <p class="effective">Effective Date: November 14, 2026 (version 4.0). The policy that applied to version 3.0 is <a href="3.0.html">kept here</a> for the record.</p>
+        <p class="effective">Effective Date: November 14, 2026 (version 4.0); the mailin Enterprise section was added on November 25, 2026. The policy that applied to version 3.0 is <a href="3.0.html">kept here</a> for the record.</p>
 
         <div class="highlight">
             mailin collects no personal data. There is no mailin server: your archive, your mail and your sign-in details stay on your device or go directly to the mail provider you chose.
@@ -120,6 +120,15 @@
         <p><strong>Connected edition</strong> (mailin 4.0 on the App Store). Adds optional connected mail for Gmail, Outlook / Microsoft 365, iCloud Mail, Fastmail and other IMAP / SMTP accounts. Connected mail is <strong>off</strong> until you turn it on, and each account is allowed nothing until you switch on, one by one, what it may do.</p>
         <p><strong>Offline edition</strong> (mailin 3.x, and offline builds made for organisations). Its app sandbox grants no network access and it offers no way to add an account, so it cannot connect to any server. Everything on this page about connected mail does not apply to it.</p>
         <p>The About window in the app says which edition you have.</p>
+
+        <h2>mailin Enterprise (organisation-managed devices)</h2>
+        <p><strong>mailin Enterprise</strong> (<code>com.ecosanskriti.mailin.enterprise</code>) is the same app as the connected edition, bought by an organisation for its people and installed by the organisation&rsquo;s device management (MDM). Everything on this page applies to it, plus the following:</p>
+        <ul>
+            <li><strong>Your organisation&rsquo;s settings.</strong> The app reads the settings your organisation sends to the device (managed app configuration) &mdash; for example the organisation&rsquo;s name, your role, whether exporting or printing is allowed, whether Live Mail may be used, which mail providers are allowed, whether mail may be sent or changed on the server, and a download speed limit. They are read on the device only. Settings fixed by your organisation are shown in the app as &ldquo;Set by your organisation&rdquo;.</li>
+            <li><strong>What the app reports to your organisation.</strong> The app writes a short status report that your organisation&rsquo;s MDM can read (managed app feedback): the app version, edition and channel, your role, the export and print settings, the Live Mail settings in force, the licence state, and any problems in the pushed settings. It contains <strong>nothing from your archive or your mail</strong>. It is read by your organisation&rsquo;s MDM; it is never sent to us.</li>
+            <li><strong>Licence keys.</strong> An organisation licence key, if your organisation uses one, is checked on the device against a key built into the app. Nothing is sent to us to check it.</li>
+            <li><strong>Who controls the data.</strong> On a device your organisation manages, your organisation decides how the app may be used and what happens to the device and its data, under its own policies. We still receive nothing: there is no mailin server, no analytics and no crash upload in the enterprise edition either.</li>
+        </ul>
 
         <h2>Data Collection</h2>
         <p>mailin collects <strong>no</strong> user data in either edition. We do not collect analytics, usage data, crash reports, device information, contact lists, email content or any other personal information, and we have no server that could receive it. Nothing you import, save, search or send reaches the developer.</p>
