@@ -65,6 +65,12 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-25: macOS 4.0 (1003) approved
+
+App Store Connect, 25 Nov 2026 01:43 IST: "Review of your mailin (macOS) submission is complete … eligible for
+distribution" (submitted 23 Nov 11:56 PST, submission 6eee1f8b-c2e6-461b-b6d6-e0cf28a9d8af,
+https://apps.apple.com/app/mailin/id6767245397). iOS 4.0 (1003) submitted, in review.
+
 ## Status 2026-11-23 (evening): 1003 is ready to archive
 
 Also in 1003: CRASH-02 (7bb16e4) — crash reports are files in the on-device diagnostics folder, shown in Settings ▸
