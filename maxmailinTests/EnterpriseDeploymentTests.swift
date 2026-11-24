@@ -21,8 +21,14 @@ final class EnterpriseDeploymentTests: XCTestCase {
     // MARK: D1 — edition exclusion
 
     func testNoNetworkBuildExcludesLiveMail() {
+        #if (MAILIN_CONNECTED_MAIL || MAILIN_TEST_CONFIGURATION_Debug_Connected || MAILIN_TEST_CONFIGURATION_Release_Connected) && !NO_NETWORK_BUILD
+        // The connected edition (public 4.0 and Enterprise 4.0) ships Live Mail.
+        XCTAssertFalse(ModuleRegistry.buildExclusions.contains(.liveMail),
+                       "this configuration compiles the mail transports, so Live Mail is in the edition")
+        #else
         XCTAssertTrue(ModuleRegistry.buildExclusions.contains(.liveMail),
                       "this configuration defines NO_NETWORK_BUILD, so Live Mail is not in the edition")
+        #endif
     }
 
     func testExcludedPageIsUnavailableAndCannotBeEnabled() {

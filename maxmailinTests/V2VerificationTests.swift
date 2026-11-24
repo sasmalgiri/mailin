@@ -11172,7 +11172,11 @@ final class ConnectedMailAuditTests: XCTestCase {
         for reserved in ["d", "h", "m", "w"] { XCTAssertFalse(keys.contains(reserved), "⌥⌘\(reserved.uppercased()) is taken by macOS") }
         XCTAssertEqual(keys.count, Set(keys).count, "two Mail actions share one ⌥⌘ shortcut: \(keys)")
         XCTAssertTrue(source.contains(#"model.section = .drafts }.keyboardShortcut("e", modifiers: [.command, .option])"#))
-        for kept in ["n", "r", "a", "i", "o", "u", "l", "f"] { XCTAssertTrue(keys.contains(kept), "⌥⌘\(kept.uppercased()) was lost") }
+        for kept in ["r", "a", "i", "o", "u", "l", "f"] { XCTAssertTrue(keys.contains(kept), "⌥⌘\(kept.uppercased()) was lost") }
+        // WORD-04: New Message ⌥⌘N is in the app's File menu (any page), not only the Mail toolbar.
+        let app = try String(contentsOf: repo.appendingPathComponent("maxmailin/mailinApp.swift"), encoding: .utf8)
+        XCTAssertTrue(app.contains(#"Button("New Message") {"#) && app.contains(#".keyboardShortcut("n", modifiers: [.command, .option])"#),
+                      "⌥⌘N was lost")
     }
 
     // MARK: 9 — Health names accounts by address
