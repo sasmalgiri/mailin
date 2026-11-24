@@ -65,6 +65,12 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-25: iOS 4.0 (1003) approved — 4.0 released on both platforms
+
+App Store Connect, 25 Nov 2026 02:24 IST: "Review of your mailin (iOS) submission is complete … eligible for
+distribution" (submitted 24 Nov 04:30 PST, submission 5c90e16f-b6df-4d6e-a197-22bf8f96169f). Next: mailin
+Enterprise 4.0 on branch `enterprise-4.0` (docs/ENTERPRISE_4_0_PLAN.md).
+
 ## Status 2026-11-25: macOS 4.0 (1003) approved
 
 App Store Connect, 25 Nov 2026 01:43 IST: "Review of your mailin (macOS) submission is complete … eligible for
