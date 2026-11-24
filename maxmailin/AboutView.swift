@@ -423,9 +423,9 @@ private struct EnterpriseLicenseSection: View {
 
     var body: some View {
         VStack(spacing: Spacing.xxSmall) {
-            Text(store.license.summary)
+            Text(EnterpriseChannel.current.summary(for: store.license))
                 .font(Typography.caption1)
-                .foregroundColor(store.license.tier == .professional ? AppColors.secondary : .orange)
+                .foregroundColor(EnterpriseChannel.current.tier(for: store.license) == .professional ? AppColors.secondary : .orange)
                 .multilineTextAlignment(.center)
                 .accessibilityIdentifier("about.license")
             if ManagedConfig.licenseKey == nil {

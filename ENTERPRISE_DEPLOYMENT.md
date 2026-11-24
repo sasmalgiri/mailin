@@ -112,7 +112,7 @@ Unmanaged installs (no configuration) behave as before roles existed: the single
 mailin writes **Managed App Feedback** (`com.apple.feedback.managed`) at every launch, which your MDM reads
 with the *Managed Application Feedback* command (iOS) or its app-inventory report:
 
-`appVersion`, `appBuild`, `edition`, `role`, `allowExport`, `allowPrint`, `licenseState`
+`appVersion`, `appBuild`, `edition`, `channel`, `role`, `allowExport`, `allowPrint`, `licenseState`
 (`valid` / `grace` / `expired` / `missing` / `invalid`), `licenseID`, `licenseOrg`, `licenseExpires`,
 `configIssues` (every problem in the pushed configuration), `liveMail` (the Live Mail controls in force:
 `allowConnectedMail`, `allowSendMail`, `allowServerChanges`, `allowedMailProviders`, and the sync conditions and
@@ -126,16 +126,25 @@ the device and in `configIssues`, and never silently dropped.
 
 ## Seats
 
-A seat is one device installation. The app cannot count installs (it has no network); account for seats with
-your MDM's inventory of devices reporting your `licenseID` in Managed App Feedback, and with the seat count in
-Apple Business Manager. The seat number printed on the key is the contractual figure.
+- **App Store listing:** a seat is one copy bought in Apple Business Manager ▸ Apps and Books and assigned by
+  your MDM (to a device or a Managed Apple Account). Apple Business Manager shows how many copies are bought
+  and assigned; reassign a copy when a person leaves.
+- **Custom App:** a seat is one device installation. The app does not count installs; account for seats with
+  your MDM's inventory of devices reporting your `licenseID` in Managed App Feedback. The seat number printed
+  on the key is the contractual figure.
 
 ## Licensing
 
-mailin Enterprise is a free Custom App in Apple Business Manager; the organisation's licence is a signed key
-checked offline on the device. Push it as `licenseKey` (or users paste it in About mailin ▸ Enter license
-key…). A valid key unlocks everything; without one — or 30 days after expiry — the archive, search and exports
-keep working and only the Professional tools wait for a key. Details: `LICENSING.md`. Contact
+- **App Store listing (mailin Enterprise, paid):** the purchase is the licence — every feature is available
+  and no key is needed. About shows "Every feature is included in your organisation's purchase." If you push a
+  `licenseKey` anyway, it only adds your organisation's name and seat count to About and Managed App Feedback;
+  an expired or wrong key never locks anything.
+- **Custom App:** the organisation's licence is a signed key checked offline on the device. Push it as
+  `licenseKey` (or users paste it in About mailin ▸ Enter license key…). A valid key unlocks everything;
+  without one — or 30 days after expiry — the archive, search and exports keep working and only the
+  Professional tools wait for a key.
+
+Managed App Feedback reports `channel` (`appStore` or `customApp`). Details: `LICENSING.md`. Contact
 sasmalgiri@gmail.com for licensing.
 
 ## Audit log for your SIEM / records system

@@ -14642,3 +14642,63 @@ final class EnterpriseLiveMailControlsTests: XCTestCase {
         XCTAssertEqual(none, 0)
     }
 }
+
+/// ENT4-01 / ENT4-03 (owner 2026-11-24): the enterprise build is the connected
+/// 4.0 configuration; on the paid App Store listing the purchase unlocks
+/// everything without a key, a Custom App build keeps the signed-key rule.
+final class EnterpriseChannelTests: XCTestCase {
+
+    private let payload = EnterpriseLicense.Payload(v: 1, org: "Contoso Legal", seats: 25, issued: "2026-11-01", expires: "2026-12-31", id: "LIC-1")
+
+    func testENT403AppStoreListingUnlocksEverythingWithOrWithoutAKey() {
+        let channel = EnterpriseChannel.appStoreListing
+        XCTAssertFalse(channel.needsLicenseKey)
+        for status: EnterpriseLicense.Status in [.missing, .invalid("This is not a mailin license key."), .valid(payload),
+                                                 .grace(payload, daysLeft: 3), .expired(payload)] {
+            XCTAssertEqual(channel.tier(for: EnterpriseLicense(status: status)), .professional, "\(status)")
+        }
+        let missing = channel.summary(for: EnterpriseLicense(status: .missing))
+        XCTAssertTrue(missing.contains("No license key is needed"), missing)
+        XCTAssertTrue(channel.summary(for: EnterpriseLicense(status: .valid(payload))).contains("Contoso Legal"))
+        let expired = channel.summary(for: EnterpriseLicense(status: .expired(payload)))
+        XCTAssertTrue(expired.contains("Every feature stays available"), expired)
+        XCTAssertFalse(expired.contains("renew"), "a paid listing never asks to renew a key")
+    }
+
+    func testENT403CustomAppKeepsTheSignedKeyRule() {
+        let channel = EnterpriseChannel.customApp
+        XCTAssertTrue(channel.needsLicenseKey)
+        XCTAssertEqual(channel.tier(for: EnterpriseLicense(status: .valid(payload))), .professional)
+        XCTAssertEqual(channel.tier(for: EnterpriseLicense(status: .grace(payload, daysLeft: 3))), .professional)
+        XCTAssertEqual(channel.tier(for: EnterpriseLicense(status: .missing)), .personal, "never below Personal")
+        XCTAssertEqual(channel.tier(for: EnterpriseLicense(status: .expired(payload))), .personal)
+        XCTAssertEqual(channel.summary(for: EnterpriseLicense(status: .missing)), EnterpriseLicense(status: .missing).summary)
+    }
+
+    func testENT403TheChannelIsABuildSettingAndEveryEnterpriseScreenAsksIt() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        func read(_ path: String) throws -> String { try String(contentsOf: repo.appendingPathComponent(path), encoding: .utf8) }
+        let channel = try read("maxmailin/EnterpriseChannel.swift")
+        XCTAssertTrue(channel.contains("#if ENTERPRISE_CUSTOM_APP"))
+        let store = try read("maxmailin/StoreManager.swift")
+        XCTAssertEqual(store.components(separatedBy: "currentTier = EnterpriseChannel.current.tier(for: license)").count - 1, 2,
+                       "launch and a new key both take the channel's tier")
+        XCTAssertFalse(store.contains("currentTier = license.tier"))
+        XCTAssertTrue(try read("maxmailin/AboutView.swift").contains("EnterpriseChannel.current.summary(for: store.license)"))
+        XCTAssertTrue(try read("maxmailin/PaywallView.swift").contains("EnterpriseChannel.current.summary(for: store.license)"))
+    }
+
+    func testENT401EnterpriseBuildIsTheConnectedConfigurationWithItsOwnKeychainGroup() throws {
+        let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let script = try String(contentsOf: repo.appendingPathComponent("Scripts/testflight.sh"), encoding: .utf8)
+        XCTAssertTrue(script.contains(#"CONFIGURATION=Release-Connected"#))
+        XCTAssertTrue(script.contains(#"CONDITIONS="MAILIN_CONNECTED_MAIL ENTERPRISE_EDITION""#))
+        XCTAssertTrue(script.contains(#"custom) CONDITIONS="$CONDITIONS ENTERPRISE_CUSTOM_APP""#))
+        XCTAssertTrue(script.contains("network.client entitlement missing (Live Mail needs it)"))
+        XCTAssertFalse(script.contains("NO_NETWORK_BUILD ENTERPRISE_EDITION"), "the 3.0 offline enterprise build is gone")
+        // The public app and the enterprise app never share Keychain items (mail passwords, tokens, audit keys).
+        let entitlements = try String(contentsOf: repo.appendingPathComponent("mailin/mailin-connected.entitlements"), encoding: .utf8)
+        XCTAssertTrue(entitlements.contains("<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>"))
+        XCTAssertFalse(entitlements.contains("$(AppIdentifierPrefix)com.ecosanskriti.mailin<"))
+    }
+}

@@ -913,7 +913,7 @@ struct PlanAndPurchasesSection: View {
 
     private var ownershipText: String {
         #if ENTERPRISE_EDITION
-        return store.license.summary
+        return EnterpriseChannel.current.summary(for: store.license)   // ENT4-03
         #else
         switch store.effectiveTier {
         case .free:

@@ -7,10 +7,16 @@
 #   Scripts/testflight.sh --build 302 --upload        # ...and upload to App Store Connect
 #   Scripts/testflight.sh --build 302 --platform ios  # one platform only (ios | macos | both)
 #   Scripts/testflight.sh --build 302 --tests         # run the purchase + gate tests first
-#   Scripts/testflight.sh --build 302 --edition enterprise --upload
-#                                                     # the Custom App (Apple Business Manager):
-#                                                     # bundle com.ecosanskriti.mailin.enterprise,
-#                                                     # ENTERPRISE_EDITION, no StoreKit (LICENSING.md)
+#   Scripts/testflight.sh --build 1 --edition enterprise --upload
+#                                                     # mailin Enterprise 4.0 (ENT4-01): bundle
+#                                                     # com.ecosanskriti.mailin.enterprise, the
+#                                                     # connected configuration (Live Mail, with
+#                                                     # the MDM controls), ENTERPRISE_EDITION, no
+#                                                     # StoreKit. Default channel: the paid App Store
+#                                                     # listing (the purchase unlocks everything).
+#   Scripts/testflight.sh --build 1 --edition enterprise --channel custom
+#                                                     # the same for a Custom App (ENTERPRISE_CUSTOM_APP:
+#                                                     # the signed licence key decides, LICENSING.md)
 #
 # The build number is passed to xcodebuild (CURRENT_PROJECT_VERSION), so the
 # project file is never edited; App Store Connect requires a new number for
@@ -18,9 +24,11 @@
 # an App Store Connect API key when ASC_KEY_ID, ASC_ISSUER_ID and
 # ASC_KEY_PATH are set, otherwise the Apple Account signed in to Xcode.
 #
-# Each archive is checked before export: bundle id, version and build,
-# NO_NETWORK_BUILD, and on macOS the sandbox entitlement and
-# Scripts/verify-no-network.sh. Any failure stops the script before upload.
+# Each archive is checked before export: bundle id, version and build, and on
+# macOS the sandbox entitlement plus — public offline build — no network
+# entitlement and Scripts/verify-no-network.sh, or — enterprise connected
+# build — the outgoing-connections entitlement Live Mail needs. Any failure
+# stops the script before upload.
 
 set -u
 ROOT="${0:A:h:h}"
@@ -31,6 +39,9 @@ SCHEME=maxmailin
 TEAM=6TPTCJD42Q
 BUNDLE_ID=com.ecosanskriti.mailin
 EDITION=public
+CHANNEL=store
+CONFIGURATION=Release
+CONNECTED=0
 XB=/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
 
 BUILD=""
@@ -44,6 +55,7 @@ while (( $# )); do
         --upload) UPLOAD=1; shift ;;
         --tests) RUN_TESTS=1; shift ;;
         --edition) EDITION="$2"; shift 2 ;;
+        --channel) CHANNEL="$2"; shift 2 ;;
         -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $1"; exit 2 ;;
     esac
@@ -56,14 +68,25 @@ EDITION_SETTINGS=()
 case "$EDITION" in
     public) ;;
     enterprise)
+        # ENT4-01: the connected 4.0 configuration (Live Mail + MDM controls).
         BUNDLE_ID=com.ecosanskriti.mailin.enterprise
-        EDITION_SETTINGS=(PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID "SWIFT_ACTIVE_COMPILATION_CONDITIONS=NO_NETWORK_BUILD ENTERPRISE_EDITION")
+        SCHEME="maxmailin Connected"
+        CONFIGURATION=Release-Connected
+        CONNECTED=1
+        CONDITIONS="MAILIN_CONNECTED_MAIL ENTERPRISE_EDITION"
+        case "$CHANNEL" in
+            store) ;;
+            custom) CONDITIONS="$CONDITIONS ENTERPRISE_CUSTOM_APP" ;;
+            *) echo "--channel must be store or custom"; exit 2 ;;
+        esac
+        EDITION_SETTINGS=(PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID "SWIFT_ACTIVE_COMPILATION_CONDITIONS=$CONDITIONS")
         ;;
     *) echo "--edition must be public or enterprise"; exit 2 ;;
 esac
+[[ "$EDITION" == enterprise || "$CHANNEL" == store ]] || { echo "--channel is for --edition enterprise"; exit 2; }
 
 OUT="$ROOT/build-testflight/$BUILD"
-[[ "$EDITION" == enterprise ]] && OUT="$ROOT/build-testflight/$BUILD-enterprise"
+[[ "$EDITION" == enterprise ]] && OUT="$ROOT/build-testflight/$BUILD-enterprise-$CHANNEL"
 mkdir -p "$OUT"
 LOG="$OUT/testflight.log"
 : > "$LOG"
@@ -81,13 +104,13 @@ fi
 if [[ -n "$(git status --porcelain -- maxmailin mailin Packages 2>/dev/null)" ]]; then
     say "WARNING: uncommitted source changes; the build will not match a commit."
 fi
-say "Commit: $(git rev-parse --short HEAD)  Version: build $BUILD"
+say "Commit: $(git rev-parse --short HEAD)  Version: build $BUILD  Edition: $EDITION ($CONFIGURATION$( (( CONNECTED )) && print ", channel $CHANNEL"))"
 
 if (( RUN_TESTS )); then
     say "== Purchase and gate tests (iOS simulator)"
     SIM=$(xcrun simctl list devices available | grep -m1 -E "iPhone .*\(" | grep -oE '[0-9A-F-]{36}')
     [[ -n "$SIM" ]] || fail "no available iPhone simulator"
-    $XB test -project $PROJECT -scheme $SCHEME -destination "platform=iOS Simulator,id=$SIM" \
+    $XB test -project $PROJECT -scheme "$SCHEME" -destination "platform=iOS Simulator,id=$SIM" \
         -only-testing:maxmailinTests/StoreKitPurchaseFlowTests \
         -only-testing:maxmailinTests/PurchaseGateTests \
         -only-testing:maxmailinTests/PurchasePresentationTests \
@@ -133,9 +156,15 @@ verify_archive() {
     ents=$(codesign -d --entitlements - --xml "$app" 2>/dev/null | plutil -convert xml1 -o - - 2>/dev/null)
     if [[ "$platform" == macos ]]; then
         print -r -- "$ents" | grep -q "com.apple.security.app-sandbox" || fail "macos: app sandbox entitlement missing"
-        print -r -- "$ents" | grep -q "com.apple.security.network.client" && fail "macos: network.client entitlement present"
-        Scripts/verify-no-network.sh "$app" >> "$LOG" 2>&1 || fail "macos: verify-no-network.sh failed — see $LOG"
-        say "macos: sandboxed, no network entitlement, verify-no-network PASS"
+        if (( CONNECTED )); then
+            print -r -- "$ents" | grep -q "com.apple.security.network.client" || fail "macos: network.client entitlement missing (Live Mail needs it)"
+            print -r -- "$ents" | grep -q "com.apple.security.network.server" && fail "macos: network.server entitlement present"
+            say "macos: sandboxed, outgoing connections only (Live Mail)"
+        else
+            print -r -- "$ents" | grep -q "com.apple.security.network.client" && fail "macos: network.client entitlement present"
+            Scripts/verify-no-network.sh "$app" >> "$LOG" 2>&1 || fail "macos: verify-no-network.sh failed — see $LOG"
+            say "macos: sandboxed, no network entitlement, verify-no-network PASS"
+        fi
     fi
     # The StoreKit test file must not decide anything in a shipped build:
     # StoreKit ignores it outside Xcode, but a reviewer should not find it.
@@ -149,7 +178,7 @@ run_platform() {
     [[ "$platform" == ios ]] && destination="generic/platform=iOS" || destination="generic/platform=macOS"
     local archive="$OUT/mailin-$platform.xcarchive"
     say "== $platform: archive"
-    $XB archive -project $PROJECT -scheme $SCHEME -configuration Release -destination "$destination" \
+    $XB archive -project $PROJECT -scheme "$SCHEME" -configuration "$CONFIGURATION" -destination "$destination" \
         -archivePath "$archive" CURRENT_PROJECT_VERSION="$BUILD" "${EDITION_SETTINGS[@]}" -allowProvisioningUpdates "${AUTH[@]}" \
         > "$OUT/archive-$platform.log" 2>&1 || fail "$platform archive failed — see $OUT/archive-$platform.log"
     verify_archive "$platform" "$archive"

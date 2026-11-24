@@ -1,5 +1,19 @@
 # Selling mailin: private users and enterprises (decided 2026-10-11)
 
+> **4.0 update (owner decisions 2026-11-24, built 2026-11-25 on branch `enterprise-4.0`, ENT4-01…03).**
+> mailin Enterprise 4.0 is the connected build (Live Mail, which IT can restrict or switch off by MDM) and
+> reaches organisations two ways, chosen when the build is made:
+>
+> | | A — App Store listing (now) | C — Custom App (per customer, later) |
+> |---|---|---|
+> | Build | `Scripts/testflight.sh --build N --edition enterprise` | `… --edition enterprise --channel custom` (adds `ENTERPRISE_CUSTOM_APP`) |
+> | App Store Connect | public, **paid upfront US$299.99**, volume purchase in Apple Business Manager | private, the customer's Organization ID, price free |
+> | What unlocks it | **the purchase — everything, no key** (a key pushed by MDM only names the organisation and seats) | the signed key, as below (valid or 30-day grace = everything; never below Personal) |
+> | Apple's share | 15% / 30% of the price | none on your invoice |
+>
+> No TestFlight (owner 2026-11-24): builds are uploaded and submitted for review; prospects get promo codes.
+> The rest of this document describes channel C (and the private-user channel), unchanged since 3.0.
+
 mailin is sold through **two channels from one code base**. Nothing in the product differs except how it is
 paid for and who can install it.
 

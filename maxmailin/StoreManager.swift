@@ -430,7 +430,7 @@ class StoreManager: ObservableObject {
 
     func refreshLicense() {
         license = EnterpriseLicense.current()
-        currentTier = license.tier
+        currentTier = EnterpriseChannel.current.tier(for: license)   // ENT4-03
         publishAccessScope()
     }
     #endif
@@ -453,10 +453,11 @@ class StoreManager: ObservableObject {
 
     init() {
         #if ENTERPRISE_EDITION
-        // Enterprise edition: no purchases, never touch StoreKit; the tier
-        // is the organization's signed license (LICENSING.md).
+        // Enterprise edition: no purchases, never touch StoreKit. ENT4-03: on
+        // the App Store listing the purchase is the licence (everything); a
+        // Custom App build runs at the organization's signed license (LICENSING.md).
         license = EnterpriseLicense.current()
-        currentTier = license.tier
+        currentTier = EnterpriseChannel.current.tier(for: license)
         #else
         transactionListener = listenForTransactions()
         Task { await loadProducts() }

@@ -179,6 +179,7 @@ enum ManagedConfig {
         ]
         #if ENTERPRISE_EDITION
         out["edition"] = "enterprise"
+        out["channel"] = EnterpriseChannel.current.rawValue   // ENT4-03: appStore | customApp
         #else
         out["edition"] = "public"
         #endif
