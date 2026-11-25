@@ -65,6 +65,13 @@ any page, named toolbar buttons (WORD-01…04), and empty-draft handling (DRAFT-
 - [ ] Not run by the agent (blocked in its sandbox): the Release-configuration app unit run and the five Release UI
       journeys of 19 Nov. Optional re-run: scheme "maxmailin Release Tests" ▸ Test, with you at the Mac.
 
+## Status 2026-11-26: 4.0.1 (1004) submitted; mailin Enterprise 4.0 (4) submitted
+
+- mailin 4.0.1 (1004, 8e864a6 + 9685b38): HANG-01 fix only; What's New in 10 languages; uploaded via Organizer and
+  submitted for iOS and macOS together; China mainland removed from availability (owner).
+- mailin Enterprise 4.0 (build 4, branch enterprise-4.0 013c173): own icon, HANG-01, reviewed listing text; submitted
+  for iOS and macOS together.
+
 ## Status 2026-11-25: iOS 4.0 (1003) approved — 4.0 released on both platforms
 
 App Store Connect, 25 Nov 2026 02:24 IST: "Review of your mailin (iOS) submission is complete … eligible for
