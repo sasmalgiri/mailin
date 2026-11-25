@@ -162,65 +162,14 @@ final class BackgroundAnalysisManager: ObservableObject {
         var findings: [BackgroundFinding] = []
         let timestamp = Date()
 
-        // 1. Anomaly detection
-        let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
-        for anomaly in anomalies where anomaly.severity >= 0.5 {
-            findings.append(BackgroundFinding(
-                category: "anomaly",
-                title: anomaly.title,
-                detail: anomaly.detail,
-                severity: anomaly.severity,
-                timestamp: timestamp
-            ))
-        }
-
-        // 2. Phishing re-scan
-        let phishing = EmailNLPEngine.detectPhishing(in: emails)
-        let highRiskPhishing = phishing.filter { $0.riskLevel == .high }
-        if !highRiskPhishing.isEmpty {
-            findings.append(BackgroundFinding(
-                category: "phishing",
-                title: "\(highRiskPhishing.count) High-Risk Phishing Email\(highRiskPhishing.count == 1 ? "" : "s")",
-                detail: String(localized: "Subjects: ") + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
-                severity: 0.9,
-                timestamp: timestamp
-            ))
-        }
-
-        // 3. PII exposure check
-        let pii = EmailNLPEngine.piiSummary(in: emails)
-        let piiTotal = pii.values.reduce(0, +)
-        if piiTotal > 0 {
-            let types = pii.filter { $0.value > 0 }.keys.map(\.rawValue).joined(separator: ", ")
-            findings.append(BackgroundFinding(
-                category: "pii",
-                title: "\(piiTotal) PII Exposure\(piiTotal == 1 ? "" : "s")",
-                detail: "Types: \(types)",
-                severity: piiTotal >= 5 ? 0.8 : 0.5,
-                timestamp: timestamp
-            ))
-        }
-
-        // 4. Sentiment trend analysis
-        let sentiments = EmailNLPEngine.analyzeSentiment(of: emails)
-        if sentiments.count >= 20 {
-            let midpoint = sentiments.count / 2
-            let firstHalf = sentiments.prefix(midpoint)
-            let secondHalf = sentiments.suffix(sentiments.count - midpoint)
-            let avgFirst = firstHalf.map(\.score).reduce(0, +) / Double(firstHalf.count)
-            let avgSecond = secondHalf.map(\.score).reduce(0, +) / Double(secondHalf.count)
-            let shift = avgSecond - avgFirst
-            if abs(shift) > 0.3 {
-                let direction = shift > 0 ? "positive" : "negative"
-                findings.append(BackgroundFinding(
-                    category: "sentiment",
-                    title: String(localized: "Sentiment Shift Detected"),
-                    detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%",
-                    severity: min(abs(shift), 1.0),
-                    timestamp: timestamp
-                ))
-            }
-        }
+        // Hang fix 2026-11-25 (owner's Debug session froze, then SIGTERM in
+        // icu::RegexMatcher on the main thread): the anomaly, phishing, PII and
+        // sentiment scans over the working set are CPU work — they run off the
+        // main actor; only their findings come back to it.
+        let emailsForScan = emails
+        findings.append(contentsOf: await Task.detached(priority: .utility) {
+            Self.scanFindings(in: emailsForScan, timestamp: timestamp)
+        }.value)
 
         // 5. Knowledge graph update
         #if canImport(FoundationModels)
@@ -279,6 +228,72 @@ final class BackgroundAnalysisManager: ObservableObject {
         }
 
         logger.info("Background analysis complete: \(findings.count) findings")
+    }
+
+    /// Steps 1–4 of the analysis (anomalies, phishing, PII, sentiment): pure
+    /// computation over `emails`, safe to run on any thread.
+    nonisolated static func scanFindings(in emails: [MBOXParser.RawEmail], timestamp: Date) -> [BackgroundFinding] {
+        var findings: [BackgroundFinding] = []
+            // 1. Anomaly detection
+            let anomalies = AnomalyDetectionEngine.detectAnomalies(in: emails)
+            for anomaly in anomalies where anomaly.severity >= 0.5 {
+                findings.append(BackgroundFinding(
+                        category: "anomaly",
+                        title: anomaly.title,
+                        detail: anomaly.detail,
+                        severity: anomaly.severity,
+                        timestamp: timestamp
+                ))
+            }
+
+            // 2. Phishing re-scan
+            let phishing = EmailNLPEngine.detectPhishing(in: emails)
+            let highRiskPhishing = phishing.filter { $0.riskLevel == .high }
+            if !highRiskPhishing.isEmpty {
+                findings.append(BackgroundFinding(
+                        category: "phishing",
+                        title: "\(highRiskPhishing.count) High-Risk Phishing Email\(highRiskPhishing.count == 1 ? "" : "s")",
+                        detail: String(localized: "Subjects: ") + highRiskPhishing.prefix(3).compactMap { $0.email.headers["Subject"] }.joined(separator: ", "),
+                        severity: 0.9,
+                        timestamp: timestamp
+                ))
+            }
+
+            // 3. PII exposure check
+            let pii = EmailNLPEngine.piiSummary(in: emails)
+            let piiTotal = pii.values.reduce(0, +)
+            if piiTotal > 0 {
+                let types = pii.filter { $0.value > 0 }.keys.map(\.rawValue).joined(separator: ", ")
+                findings.append(BackgroundFinding(
+                        category: "pii",
+                        title: "\(piiTotal) PII Exposure\(piiTotal == 1 ? "" : "s")",
+                        detail: "Types: \(types)",
+                        severity: piiTotal >= 5 ? 0.8 : 0.5,
+                        timestamp: timestamp
+                ))
+            }
+
+            // 4. Sentiment trend analysis
+            let sentiments = EmailNLPEngine.analyzeSentiment(of: emails)
+            if sentiments.count >= 20 {
+                let midpoint = sentiments.count / 2
+                let firstHalf = sentiments.prefix(midpoint)
+                let secondHalf = sentiments.suffix(sentiments.count - midpoint)
+                let avgFirst = firstHalf.map(\.score).reduce(0, +) / Double(firstHalf.count)
+                let avgSecond = secondHalf.map(\.score).reduce(0, +) / Double(secondHalf.count)
+                let shift = avgSecond - avgFirst
+                if abs(shift) > 0.3 {
+                        let direction = shift > 0 ? "positive" : "negative"
+                        findings.append(BackgroundFinding(
+                            category: "sentiment",
+                            title: String(localized: "Sentiment Shift Detected"),
+                            detail: "Overall tone shifted \(direction) by \(String(format: "%.1f", abs(shift) * 100))%",
+                            severity: min(abs(shift), 1.0),
+                            timestamp: timestamp
+                        ))
+                }
+            }
+        return findings
     }
 
     private func alertType(for category: String) -> SmartAlertType {
@@ -431,12 +446,19 @@ extension BackgroundAnalysisManager {
             for try await batch in ArchiveDataService.shared.streamFullEmails(query: .all, batchSize: 200) {
                 while BackgroundBudget.shouldPause { try await Task.sleep(for: .seconds(60)) }
                 if assertion.isExpiring || Task.isCancelled { break }
-                for flag in EmailNLPEngine.detectPhishing(in: batch) where flag.riskLevel == .high {
+                // HANG-01: the batch's scans run off the main actor; only the counts return.
+                let scanned = await Task.detached(priority: .utility) { () -> ([String], [EmailNLPEngine.PIIType: Int], [Double]) in
+                    let high = EmailNLPEngine.detectPhishing(in: batch).filter { $0.riskLevel == .high }
+                    return (high.map { $0.email.headers["Subject"] ?? "" },
+                            EmailNLPEngine.piiSummary(in: batch),
+                            EmailNLPEngine.analyzeSentiment(of: batch).map(\.score))
+                }.value
+                for subject in scanned.0 {
                     highRiskCount += 1
-                    if highRiskSubjects.count < 3, let s = flag.email.headers["Subject"] { highRiskSubjects.append(s) }
+                    if highRiskSubjects.count < 3, !subject.isEmpty { highRiskSubjects.append(subject) }
                 }
-                for (type, n) in EmailNLPEngine.piiSummary(in: batch) { pii[type, default: 0] += n }
-                scores.append(contentsOf: EmailNLPEngine.analyzeSentiment(of: batch).map(\.score))
+                for (type, n) in scanned.1 { pii[type, default: 0] += n }
+                scores.append(contentsOf: scanned.2)
                 #if canImport(FoundationModels)
                 if #available(macOS 26, iOS 26, *), let kg = graph as? KnowledgeGraph {
                     KnowledgeGraphBuilder.build(from: batch, into: kg)
