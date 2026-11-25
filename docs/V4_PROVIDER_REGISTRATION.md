@@ -255,6 +255,14 @@ lets tenant admins pre-consent and is shown during publisher verification.
 4. Branding & properties ▸ Publisher verification ▸ add the MPN ID ▸ Verify. The consent screen then shows the
    blue "verified" badge.
 
+**Status 2026-11-26:** the publisher-domain file is live at
+`https://sasmalgiri.github.io/.well-known/microsoft-identity-association.json` (new user-site repository
+`sasmalgiri/sasmalgiri.github.io`, `.nojekyll`, root page forwards to `/mailin/`), naming Application ID
+`78c2a12e-26e0-4043-a1a8-cbcdb847cb49`. **mailin Enterprise** signs in with redirect
+`msauth.com.ecosanskriti.mailin.enterprise://auth` (from `msauth.$(PRODUCT_BUNDLE_IDENTIFIER)://auth`): it must be added
+to the same registration (Authentication ▸ iOS / macOS platform ▸ bundle ID `com.ecosanskriti.mailin.enterprise`), or
+Outlook sign-in fails in Enterprise with a redirect mismatch.
+
 ### 2.6 Paste these values back (Microsoft)
 
 | Value from Entra | Goes to | Exactly |
