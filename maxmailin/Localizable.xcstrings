@@ -468564,6 +468564,134 @@
           }
         }
       }
+    },
+    "Stays Responsive During Analysis" : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bleibt während der Analyse reaktionsschnell"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sigue respondiendo durante el análisis"
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reste réactif pendant l'analyse"
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "विश्लेषण के दौरान भी तेज़ प्रतिक्रिया"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resta reattivo durante l'analisi"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分析中も快適に操作可能"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "분석 중에도 빠르게 반응"
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continua responsivo durante a análise"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分析时依然流畅响应"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "分析時依然流暢回應"
+          }
+        }
+      }
+    },
+    "With AI Insights on, mailin checks your newest mail in the background when it opens. That check no longer holds up the window: you can browse, search and read while it runs." : {
+      "localizations" : {
+        "de" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Wenn KI-Einblicke aktiviert ist, prüft mailin beim Öffnen Ihre neuesten E-Mails im Hintergrund. Diese Prüfung blockiert das Fenster nicht mehr: Sie können währenddessen blättern, suchen und lesen."
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con Información de IA activada, mailin revisa tu correo más reciente en segundo plano al abrirse. Esa revisión ya no bloquea la ventana: puedes navegar, buscar y leer mientras se ejecuta."
+          }
+        },
+        "fr" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Avec Informations IA activé, mailin vérifie vos e-mails les plus récents en arrière-plan à l'ouverture. Cette vérification ne bloque plus la fenêtre : vous pouvez parcourir, rechercher et lire pendant qu'elle s'exécute."
+          }
+        },
+        "hi" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI अंतर्दृष्टि चालू होने पर mailin खुलते ही पृष्ठभूमि में आपके नवीनतम मेल की जाँच करता है। अब यह जाँच विंडो को नहीं रोकती: जाँच के दौरान आप ब्राउज़ कर सकते हैं, खोज सकते हैं और पढ़ सकते हैं।"
+          }
+        },
+        "it" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con Approfondimenti IA attivo, mailin controlla in background la posta più recente all'apertura. Quel controllo non blocca più la finestra: puoi sfogliare, cercare e leggere mentre è in corso."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI インサイトがオンのとき、mailin は起動時に最新のメールをバックグラウンドでチェックします。このチェック中もウインドウが止まらなくなり、閲覧、検索、読むことができます。"
+          }
+        },
+        "ko" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AI 인사이트가 켜져 있으면 mailin이 열릴 때 최신 메일을 백그라운드에서 확인합니다. 이제 확인하는 동안에도 창이 멈추지 않아 탐색, 검색, 읽기를 할 수 있습니다."
+          }
+        },
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Com os Insights de IA ativados, o mailin verifica seus e-mails mais recentes em segundo plano ao abrir. Essa verificação não trava mais a janela: você pode navegar, pesquisar e ler enquanto ela é executada."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开启 AI 洞察后，mailin 会在打开时于后台检查你的最新邮件。现在检查时窗口不再卡住：你可以一边浏览、搜索和阅读。"
+          }
+        },
+        "zh-Hant" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "開啟 AI 洞察後，mailin 會在開啟時於背景檢查你的最新郵件。現在檢查時視窗不再卡住：你可以一邊瀏覽、搜尋和閱讀。"
+          }
+        }
+      }
     }
   },
   "version" : "1.3"
