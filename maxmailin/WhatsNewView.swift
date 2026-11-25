@@ -161,6 +161,10 @@ private let releaseItems40: [ReleaseItem] = {
 }()
 
 private let releaseNotes: [ReleaseNote] = [
+    // 4.0.1 (HANG-01): the AI Insights background analysis no longer holds up the window.
+    ReleaseNote(version: "4.0.1", date: "November 2026", items: [
+        ReleaseItem(icon: "gauge.with.dots.needle.bottom.50percent", title: String(localized: "Stays Responsive During Analysis"), description: String(localized: "With AI Insights on, mailin checks your newest mail in the background when it opens. That check no longer holds up the window: you can browse, search and read while it runs."), color: .green),
+    ]),
     ReleaseNote(version: "4.0", date: "November 2026", items: releaseItems40),
     ReleaseNote(version: "3.0.1", date: "October 2026", items: [
         ReleaseItem(icon: "checkmark.seal", title: String(localized: "Exports Say What Happened"), description: String(localized: "Every export now ends with a receipt that reports the real result — complete, limited by the Free plan, cancelled, or failed with the reason. Outlook Archive (.pst) is in every Export menu, on iPhone and iPad too."), color: .green),
