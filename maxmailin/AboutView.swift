@@ -428,7 +428,9 @@ private struct EnterpriseLicenseSection: View {
                 .foregroundColor(EnterpriseChannel.current.tier(for: store.license) == .professional ? AppColors.secondary : .orange)
                 .multilineTextAlignment(.center)
                 .accessibilityIdentifier("about.license")
-            if ManagedConfig.licenseKey == nil {
+            // ENT4-03: the App Store listing needs no key (the purchase is the
+            // licence), so it offers no key field; an MDM key still names the org.
+            if ManagedConfig.licenseKey == nil, EnterpriseChannel.current.needsLicenseKey {
                 if entering {
                     TextField(String(localized: "License key"), text: $key)
                         .textFieldStyle(.roundedBorder)

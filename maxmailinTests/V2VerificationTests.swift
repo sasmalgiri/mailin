@@ -14685,6 +14685,8 @@ final class EnterpriseChannelTests: XCTestCase {
                        "launch and a new key both take the channel's tier")
         XCTAssertFalse(store.contains("currentTier = license.tier"))
         XCTAssertTrue(try read("maxmailin/AboutView.swift").contains("EnterpriseChannel.current.summary(for: store.license)"))
+        XCTAssertTrue(try read("maxmailin/AboutView.swift").contains("if ManagedConfig.licenseKey == nil, EnterpriseChannel.current.needsLicenseKey {"),
+                      "the App Store listing offers no licence-key field")
         XCTAssertTrue(try read("maxmailin/PaywallView.swift").contains("EnterpriseChannel.current.summary(for: store.license)"))
     }
 
