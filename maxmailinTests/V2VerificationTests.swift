@@ -14206,6 +14206,38 @@ final class DeepDiveAppFixesTests: XCTestCase {
         XCTAssertTrue(views.contains("MailAutomaticSyncSection()"), "the settings are on the Accounts page")
     }
 
+    /// HANG-01 (owner 2026-11-25: the Debug app froze and was stopped with SIGTERM
+    /// inside icu::RegexMatcher on the main thread): the background analysis's
+    /// anomaly / phishing / PII / sentiment scans run off the main actor.
+    func testBackgroundAnalysis_scansRunOffTheMainThread() async throws {
+        let emails = (0..<40).map { i in
+            MBOXParser.RawEmail(
+                headers: ["Message-ID": "<h\(i)@x>", "Subject": "Invoice \(i)", "From": "a@b.com", "To": "c@d.com",
+                          "Date": "Wed, 15 Jan 2025 14:30:00 +0000"],
+                rawSource: "From a@b.com\nCall 555-123-4567 or mail jane.doe@example.com", messageType: "email",
+                attachments: [], timestamp: "2025-01-15T14:30:00Z", domains: ["b.com"],
+                plainBody: "Call 555-123-4567 or mail jane.doe@example.com about card 4111 1111 1111 1111", htmlBody: "")
+        }
+        let ranOnMain = await Task.detached { () -> Bool in
+            _ = BackgroundAnalysisManager.scanFindings(in: emails, timestamp: Date())
+            return Thread.isMainThread
+        }.value
+        XCTAssertFalse(ranOnMain, "the scans are callable from a background task")
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let src = try String(contentsOf: root.appendingPathComponent("maxmailin/BackgroundAnalysisManager.swift"), encoding: .utf8)
+        XCTAssertTrue(src.contains("nonisolated static func scanFindings(in emails: [MBOXParser.RawEmail], timestamp: Date)"))
+        XCTAssertTrue(src.contains("await Task.detached(priority: .utility) {\n            Self.scanFindings(in: emailsForScan, timestamp: timestamp)"),
+                      "runAnalysis hands the scans to a detached task")
+        let run = try XCTUnwrap(src.range(of: "func runAnalysis() async {"))
+        let runEnd = try XCTUnwrap(src.range(of: "// 5. Knowledge graph update", range: run.upperBound..<src.endIndex))
+        XCTAssertFalse(src[run.upperBound..<runEnd.lowerBound].contains("EmailNLPEngine.detectPII"),
+                       "no scan is called directly on the main actor")
+        let whole = try XCTUnwrap(src.range(of: "func runAnalysisWholeArchive() async {"))
+        let wholeBody = src[whole.upperBound...].prefix(4000)
+        XCTAssertTrue(wholeBody.contains("let scanned = await Task.detached(priority: .utility)"),
+                      "the whole-archive pass scans each batch off the main actor too")
+    }
+
     /// CRASH-02 (owner 2026-11-23: "no need to put crash report on app window instead
     /// put it in some folder and put the path in system ui"): after an unexpected stop
     /// the report is a file in the diagnostics folder, the window shows no banner for
