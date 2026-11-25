@@ -14730,6 +14730,10 @@ final class EnterpriseChannelTests: XCTestCase {
         XCTAssertTrue(script.contains(#"custom) CONDITIONS="$CONDITIONS ENTERPRISE_CUSTOM_APP""#))
         XCTAssertTrue(script.contains("network.client entitlement missing (Live Mail needs it)"))
         XCTAssertFalse(script.contains("NO_NETWORK_BUILD ENTERPRISE_EDITION"), "the 3.0 offline enterprise build is gone")
+        XCTAssertTrue(script.contains("ASSETCATALOG_COMPILER_APPICON_NAME=AppIconEnterprise"), "the enterprise build has its own icon")
+        let icons = repo.appendingPathComponent("maxmailin/Assets.xcassets/AppIconEnterprise.appiconset")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: icons.appendingPathComponent("ios_icon_1024.png").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: icons.appendingPathComponent("icon_512x512@2x.png").path))
         // The public app and the enterprise app never share Keychain items (mail passwords, tokens, audit keys).
         let entitlements = try String(contentsOf: repo.appendingPathComponent("mailin/mailin-connected.entitlements"), encoding: .utf8)
         XCTAssertTrue(entitlements.contains("<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>"))

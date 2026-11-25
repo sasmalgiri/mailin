@@ -79,7 +79,10 @@ case "$EDITION" in
             custom) CONDITIONS="$CONDITIONS ENTERPRISE_CUSTOM_APP" ;;
             *) echo "--channel must be store or custom"; exit 2 ;;
         esac
-        EDITION_SETTINGS=(PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID "SWIFT_ACTIVE_COMPILATION_CONDITIONS=$CONDITIONS")
+        # The enterprise app has its own icon (navy, gold building badge) so the
+        # two apps are told apart on a device and in App Review (guideline 4.3).
+        EDITION_SETTINGS=(PRODUCT_BUNDLE_IDENTIFIER=$BUNDLE_ID "SWIFT_ACTIVE_COMPILATION_CONDITIONS=$CONDITIONS"
+                          ASSETCATALOG_COMPILER_APPICON_NAME=AppIconEnterprise)
         ;;
     *) echo "--edition must be public or enterprise"; exit 2 ;;
 esac
