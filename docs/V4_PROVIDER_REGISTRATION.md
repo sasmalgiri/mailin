@@ -265,6 +265,10 @@ Outlook sign-in fails in Enterprise with a redirect mismatch.
 Partner Center (2026-11-26): business email contact@ecosanskritiinnovations.co.in; documents = Certificate of
 Incorporation (SPICe+ approval letter), GST REG-06, WHOIS record; contact and identity verified, business verification
 in progress (Microsoft action, ETA 1 Dec 2026). Next: MPN ID ▸ Entra Publisher verification.
+**Verified 2026-11-26: Partner Center profile verified, Partner ID (MPN ID) 7197325.** Publisher verification needs the
+partner email domain (ecosanskritiinnovations.co.in) to match the app's publisher domain: host the same
+`microsoft-identity-association.json` at `https://ecosanskritiinnovations.co.in/.well-known/` (Bluehost File Manager) and
+set that as the publisher domain, then enter MPN ID 7197325.
 
 ### 2.6 Paste these values back (Microsoft)
 
