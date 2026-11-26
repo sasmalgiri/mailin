@@ -262,6 +262,9 @@ lets tenant admins pre-consent and is shown during publisher verification.
 `msauth.com.ecosanskriti.mailin.enterprise://auth` (from `msauth.$(PRODUCT_BUNDLE_IDENTIFIER)://auth`): it must be added
 to the same registration (Authentication ▸ iOS / macOS platform ▸ bundle ID `com.ecosanskriti.mailin.enterprise`), or
 Outlook sign-in fails in Enterprise with a redirect mismatch.
+Partner Center (2026-11-26): business email contact@ecosanskritiinnovations.co.in; documents = Certificate of
+Incorporation (SPICe+ approval letter), GST REG-06, WHOIS record; contact and identity verified, business verification
+in progress (Microsoft action, ETA 1 Dec 2026). Next: MPN ID ▸ Entra Publisher verification.
 
 ### 2.6 Paste these values back (Microsoft)
 
